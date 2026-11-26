@@ -1,0 +1,41 @@
+name: Build IPA
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Pyodide and pygame-ce
+        run: |
+          set -euo pipefail
+          VER=314.0.8
+          curl -fsSL -o core.tar.bz2 "https://github.com/pyodide/pyodide/releases/download/$VER/pyodide-core-$VER.tar.bz2"
+          tar xjf core.tar.bz2
+          APP=Payload/PyEditor.app
+          mkdir -p "$APP/www/pyodide"
+          cp index.html "$APP/www/"
+          for f in pyodide.js pyodide.asm.mjs pyodide.asm.wasm python_stdlib.zip pyodide-lock.json; do
+            cp "pyodide/$f" "$APP/www/pyodide/"
+          done
+          read -r WHL SHA < <(python3 -c 'import json; p=json.load(open("pyodide/pyodide-lock.json"))["packages"]["pygame-ce"]; print(p["file_name"], p["sha256"])')
+          curl -fsSL -o "$APP/www/pyodide/$WHL" "https://cdn.jsdelivr.net/pyodide/v$VER/full/$WHL"
+          echo "$SHA  $APP/www/pyodide/$WHL" | shasum -a 256 -c -
+
+      - name: Build app
+        run: |
+          set -euo pipefail
+          APP=Payload/PyEditor.app
+          cp Info.plist "$APP/"
+          xcrun -sdk iphoneos swiftc -target arm64-apple-ios16.4 -parse-as-library -swift-version 5 -O App.swift -o "$APP/PyEditor"
+          plutil -lint "$APP/Info.plist"
+          codesign --force --sign - "$APP"
+          zip -qry PyEditor.ipa Payload
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PyEditor-ipa
+          path: PyEditor.ipa
+          if-no-files-found: error
