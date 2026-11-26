@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pygame エディタ</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; height: 100dvh; display: flex; flex-direction: column; background: #1e1e1e; color: #eee; font-family: sans-serif; }
+header, #keys { display: flex; gap: 6px; padding: 8px; flex-wrap: wrap; align-items: center; }
+button { font-size: 16px; padding: 8px 14px; border: 0; border-radius: 6px; background: #3a3a3a; color: #fff; }
+button:disabled { opacity: .4; }
+#run { background: #2e7d32; }
+#stop { background: #c62828; }
+main { flex: 1; display: flex; min-height: 0; }
+section { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#code { flex: 1; width: 100%; resize: none; border: 0; padding: 10px; background: #111; color: #eee; font: 16px/1.5 Menlo, monospace; white-space: pre; tab-size: 4; }
+#screen { flex: 2; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 8px; }
+#canvas { max-width: 100%; height: auto !important; background: #000; touch-action: none; }
+#out { flex: 1; overflow: auto; margin: 0; padding: 10px; background: #000; white-space: pre-wrap; }
+@media (orientation: portrait) { main { flex-direction: column; } }
+</style>
+</head>
+<body>
+<header>
+  <button id="run" disabled>▶ 実行</button>
+  <button id="stop" disabled>■ 停止</button>
+  <button id="open">開く</button>
+  <button id="save">ファイルに保存</button>
+  <input id="file" type="file" accept=".py,text/plain" hidden>
+  <span id="status">準備中…</span>
+</header>
+<div id="keys"></div>
+<main>
+  <section>
+    <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+  </section>
+  <section>
+    <div id="screen"><canvas id="canvas" tabindex="0" width="400" height="300"></canvas></div>
+    <pre id="out"></pre>
+  </section>
+</main>
+
+<script type="text/plain" id="sample">import pygame
+
+pygame.init()
+screen = pygame.display.set_mode((400, 300))
+clock = pygame.time.Clock()
+x, y = 200, 150
+
+running = True
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            x, y = event.pos
+
+    screen.fill((30, 30, 60))
+    pygame.draw.circle(screen, (255, 200, 0), (x, y), 30)
+    pygame.display.flip()
+    clock.tick(60)
+</script>
+
+<script type="text/plain" id="runner">
+import ast, asyncio, inspect, os, traceback
+
+os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"
+_stop = False
+
+class _Stop(BaseException):
+    pass
+
+async def __frame():
+    # 画面を更新する時間をブラウザに渡す
+    await asyncio.sleep(0)
+    if _stop:
+        raise _Stop
+
+class _AddFrame(ast.NodeTransformer):
+    def visit_FunctionDef(self, node):
+        return node  # 普通の関数の中は変えない
+
+    def visit_ClassDef(self, node):
+        return node
+
+    def visit_Lambda(self, node):
+        return node
+
+    def visit_While(self, node):
+        self.generic_visit(node)
+        wait = ast.parse("await __frame()").body[0]
+        node.body.insert(0, ast.copy_location(wait, node))
+        return node
+
+    def visit_Expr(self, node):
+        # asyncio.run(main()) は await main() に置きかえる
+        v = node.value
+        if (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
+                and v.func.attr == "run" and isinstance(v.func.value, ast.Name)
+                and v.func.value.id == "asyncio" and len(v.args) == 1):
+            node.value = ast.copy_location(ast.Await(v.args[0]), v)
+        return node
+
+def _prepare(source):
+    tree = _AddFrame().visit(ast.parse(source, "main.py"))
+    ast.fix_missing_locations(tree)
+    return compile(tree, "main.py", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+
+async def run_user(source):
+    global _stop
+    _stop = False
+    try:
+        env = {"__name__": "__main__", "__frame": __frame}
+        result = eval(_prepare(source), env)
+        if inspect.isawaitable(result):
+            await result
+        print("--- 終了しました ---")
+    except _Stop:
+        print("--- 停止しました ---")
+    except SystemExit:
+        print("--- 終了しました ---")
+    except BaseException:
+        print(traceback.format_exc())
+    finally:
+        try:
+            import pygame
+            pygame.quit()
+        except ImportError:
+            pass
+
+def stop_user():
+    global _stop
+    _stop = True
+</script>
+
+<script src="pyodide/pyodide.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const code = $("code"), out = $("out"), status = $("status");
+const log = text => { out.textContent = (out.textContent + text + "\n").slice(-20000); out.scrollTop = out.scrollHeight; };
+
+// アプリ側(Swift)とのやりとり
+const native = window.webkit?.messageHandlers;
+const saved = window.nativeCode ?? null;
+code.value = saved ?? $("sample").textContent;
+const autosave = () => native?.autosave.postMessage(code.value);
+code.addEventListener("input", autosave);
+
+function insert(text) {
+  code.setRangeText(text, code.selectionStart, code.selectionEnd, "end");
+  code.focus();
+  autosave();
+}
+for (const k of ["字下げ", "(", ")", "[", "]", ":", "=", '"', "'", "_", "#"]) {
+  const b = document.createElement("button");
+  b.textContent = k;
+  b.addEventListener("pointerdown", e => e.preventDefault());
+  b.onclick = () => insert(k === "字下げ" ? "    " : k);
+  $("keys").appendChild(b);
+}
+code.addEventListener("keydown", e => {
+  if (e.isComposing) return;
+  if (e.key === "Tab") { e.preventDefault(); insert("    "); }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const before = code.value.slice(0, code.selectionStart);
+    const line = before.slice(before.lastIndexOf("\n") + 1);
+    let indent = line.match(/^ */)[0];
+    if (line.trimEnd().endsWith(":")) indent += "    ";
+    insert("\n" + indent);
+  }
+});
+
+$("open").onclick = () => $("file").click();
+$("file").onchange = async e => {
+  const f = e.target.files[0];
+  if (f && confirm("今のプログラムを、選んだファイルに置きかえますか？")) {
+    code.value = await f.text();
+    autosave();
+  }
+  e.target.value = "";
+};
+$("save").onclick = () => native?.exportFile.postMessage(code.value);
+
+async function start() {
+  try {
+    const py = await loadPyodide({ indexURL: new URL("pyodide/", location.href).href });
+    py.setStdout({ batched: log });
+    py.setStderr({ batched: log });
+    py._api._skip_unwind_fatal_error = true;
+    py.canvas.setCanvas2D($("canvas"));
+    await py.loadPackage("pygame-ce");
+    py.runPython($("runner").textContent);
+    const runUser = py.globals.get("run_user");
+    const stopUser = py.globals.get("stop_user");
+
+    $("run").onclick = async () => {
+      $("run").disabled = true;
+      $("stop").disabled = false;
+      out.textContent = "";
+      status.textContent = "実行中";
+      code.blur();
+      $("canvas").focus();
+      try {
+        await py.loadPackagesFromImports(code.value).catch(() => {});
+        await runUser(code.value);
+      } catch (e) {
+        log(String(e));
+      } finally {
+        $("run").disabled = false;
+        $("stop").disabled = true;
+        status.textContent = "準備OK";
+      }
+    };
+    $("stop").onclick = () => stopUser();
+    $("canvas").addEventListener("pointerdown", () => $("canvas").focus());
+    $("run").disabled = false;
+    status.textContent = "準備OK";
+  } catch (e) {
+    status.textContent = "読み込みに失敗しました";
+    log(String(e));
+  }
+}
+start();
+</script>
+</body>
+</html>
