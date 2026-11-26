@@ -7,42 +7,56 @@
 <style>
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
-body { height: 100dvh; display: flex; flex-direction: column; background: #282c34; color: #abb2bf; font-family: -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }
-header { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid #3e4452; }
+body { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font-family: -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }
+header { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--line); }
 header .title { flex: 1; text-align: center; min-width: 0; }
-#name { font-weight: 600; color: #d7dae0; }
-#status { font-size: 12px; color: #7f848e; }
-header button { width: 44px; height: 44px; border: 0; background: none; color: #61afef; display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; }
-header button:active { background: #3e4452; }
+#name { font-weight: 600; color: var(--fg); }
+#status { font-size: 12px; color: var(--comment); }
+header button { width: 44px; height: 44px; border: 0; background: none; color: var(--func); display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; }
+header button:active { background: var(--line); }
 header button:disabled { opacity: .35; }
 svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #run svg { fill: currentColor; stroke: none; width: 26px; height: 26px; }
-#run { color: #98c379; }
-#run.running { color: #e06c75; }
+#run { color: var(--string); }
+#run.running { color: var(--self); }
 #run .stop, #run.running .play { display: none; }
 #run.running .stop { display: block; }
 main { flex: 1; display: flex; min-height: 0; }
 #editor { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
-#code, #hl, #nums, #measure { font-family: Menlo, ui-monospace, monospace; font-size: 16px; line-height: 24px; tab-size: 4; font-variant-ligatures: none; letter-spacing: 0; }
-#gutter { width: 48px; overflow: hidden; flex: none; }
-#nums { margin: 0; padding: 8px 10px 8px 0; text-align: right; color: #495162; }
+#code, #hl, #nums, #measure { font-family: Menlo, ui-monospace, monospace; font-size: var(--size); line-height: var(--lh); tab-size: 4; font-variant-ligatures: none; letter-spacing: 0; }
+#gutter { width: calc(var(--size) * 3); overflow: hidden; flex: none; }
+#nums { margin: 0; padding: 8px 10px 8px 0; text-align: right; color: color-mix(in srgb, var(--fg) 40%, var(--bg)); }
 #area { flex: 1; position: relative; overflow: hidden; min-width: 0; }
 #hl { position: absolute; top: 0; left: 0; margin: 0; padding: 8px; white-space: pre; pointer-events: none; min-width: 100%; }
-#code { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 8px; border: 0; outline: 0; resize: none; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: #528bff; white-space: pre; overflow-wrap: normal; overflow: auto; }
+#code { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 8px; border: 0; outline: 0; resize: none; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--func); white-space: pre; overflow-wrap: normal; overflow: auto; }
 #code::selection { background: rgba(103,118,150,.4); }
 #measure { position: absolute; visibility: hidden; white-space: pre; top: 0; left: 0; }
-.k { color: #c678dd; } .s { color: #98c379; } .c { color: #7f848e; } .n { color: #d19a66; }
-.f { color: #61afef; } .b { color: #56b6c2; } .t { color: #e5c07b; } .v { color: #e06c75; } .o { color: #56b6c2; }
-#popup { position: absolute; z-index: 10; width: 300px; max-width: calc(100% - 8px); max-height: 192px; overflow-y: auto; background: #282c34; border: 1px solid #4b5263; border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+.k { color: var(--keyword); } .s { color: var(--string); } .c { color: var(--comment); } .n { color: var(--number); }
+.f { color: var(--func); } .b { color: var(--builtin); } .t { color: var(--type); } .v { color: var(--self); } .o { color: var(--builtin); }
+#popup { position: absolute; z-index: 10; width: 300px; max-width: calc(100% - 8px); max-height: 192px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
 #popup div { display: flex; justify-content: space-between; gap: 12px; padding: 0 10px; height: 38px; align-items: center; font: 15px Menlo, ui-monospace, monospace; cursor: pointer; }
-#popup div.on { background: #3e4452; color: #fff; }
-#popup small { color: #7f848e; font-family: -apple-system, sans-serif; white-space: nowrap; }
-#panel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid #3e4452; }
+#popup div.on { background: var(--line); color: var(--fg); }
+#popup small { color: var(--comment); font-family: -apple-system, sans-serif; white-space: nowrap; }
+#panel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); }
 #panel[hidden], #popup[hidden] { display: none; }
 #screen { flex: 2; overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 8px; min-height: 0; }
-#canvas { max-width: 100%; max-height: 100%; object-fit: contain; background: #000; touch-action: none; outline: 0; }
-#out { flex: 1; overflow: auto; margin: 0; padding: 10px; border-top: 1px solid #3e4452; white-space: pre-wrap; font: 14px/1.5 Menlo, ui-monospace, monospace; }
-@media (orientation: portrait) { main { flex-direction: column; } #panel { border-left: 0; border-top: 1px solid #3e4452; } }
+#canvas { width: auto !important; height: auto !important; max-width: 100%; max-height: 100%; background: #000; touch-action: none; outline: 0; }
+#out { flex: 1; overflow: auto; margin: 0; padding: 10px; border-top: 1px solid var(--line); white-space: pre-wrap; font: 14px/1.5 Menlo, ui-monospace, monospace; }
+@media (orientation: portrait) { main { flex-direction: column; } #panel { border-left: 0; border-top: 1px solid var(--line); } }
+/* 全画面表示 */
+body.full #screen { position: fixed; inset: 0; z-index: 20; padding: 0; background: #000; }
+#exit { position: fixed; z-index: 21; top: 8px; right: 8px; width: 48px; height: 48px; border: 0; border-radius: 24px; background: rgba(40,44,52,.75); color: #e06c75; font-size: 22px; display: none; }
+body.full #exit { display: block; }
+/* 設定画面 */
+dialog { width: min(480px, 94vw); max-height: 90%; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--fg); overflow: auto; }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog .head { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+dialog h2 { font-size: 13px; color: var(--comment); margin: 16px 16px 4px; }
+dialog label { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 44px; padding: 0 16px; }
+dialog select, dialog .btn { font-size: 16px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+dialog input[type=color] { width: 52px; height: 32px; border: 0; padding: 0; background: none; }
+dialog input[type=checkbox] { width: 22px; height: 22px; }
+#reset { margin: 8px 16px 16px; }
 </style>
 </head>
 <body>
@@ -51,6 +65,7 @@ main { flex: 1; display: flex; min-height: 0; }
   <button id="save" aria-label="ファイルに保存"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 12v8h14v-8"/></svg></button>
   <div class="title"><div id="name">main.py</div><div id="status">準備中…</div></div>
   <button id="toggle" aria-label="実行画面の表示を切りかえる"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg></button>
+  <button id="gear" aria-label="設定"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button>
   <button id="run" aria-label="実行" disabled><svg class="play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg><svg class="stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
   <input id="file" type="file" accept=".py,text/plain" hidden>
 </header>
@@ -69,6 +84,21 @@ main { flex: 1; display: flex; min-height: 0; }
     <pre id="out"></pre>
   </section>
 </main>
+<button id="exit" aria-label="停止">■</button>
+<dialog id="settings">
+  <div class="head"><strong>設定</strong><button id="close" class="btn">完了</button></div>
+  <h2>色</h2>
+  <label>テーマ<select id="theme"></select></label>
+  <div id="colors"></div>
+  <button id="reset" class="btn">色をテーマの初期値に戻す</button>
+  <h2>エディタ</h2>
+  <label>文字の大きさ<select id="size"></select></label>
+  <label>かっこ・引用符を自動で閉じる<input type="checkbox" id="pair"></label>
+  <h2>入力補完</h2>
+  <label>入力補完を使う<input type="checkbox" id="complete"></label>
+  <label>何文字目から候補を出すか<select id="min"></select></label>
+  <label>「.」の直後にも候補を出す<input type="checkbox" id="dot"></label>
+</dialog>
 
 <script type="text/plain" id="sample">import pygame
 
@@ -92,17 +122,70 @@ while running:
 </script>
 
 <script type="text/plain" id="runner">
-import ast, asyncio, inspect, os, traceback
+import ast, asyncio, inspect, os, time, traceback
 
 os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"
 _stop = False
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 class _Stop(BaseException):
     pass
 
+_next = 0.0  # 次のコマを始めてよい時刻
+
+class _Clock:
+    # もとのClockは待つ間に画面を止めることがあるので、置きかえる
+    def __init__(self):
+        self._last = time.perf_counter()
+        self._times = []
+        self._ms = 0
+
+    def tick(self, framerate=0):
+        global _next
+        now = time.perf_counter()
+        self._ms = int((now - self._last) * 1000)
+        self._last = now
+        self._times = (self._times + [self._ms])[-10:]
+        if framerate > 0:
+            _next = now + 1 / framerate
+        return self._ms
+
+    tick_busy_loop = tick
+
+    def get_time(self):
+        return self._ms
+
+    get_rawtime = get_time
+
+    def get_fps(self):
+        total = sum(self._times)
+        return 1000 * len(self._times) / total if total else 0.0
+
+def _install(pygame):
+    if getattr(pygame, "_editor_ready", False):
+        return
+    original = pygame.display.set_mode
+
+    def set_mode(size=(0, 0), flags=0, *args, **kwargs):
+        import js
+        w, h = (int(size[0]), int(size[1])) if size else (0, 0)
+        full = bool(flags & pygame.FULLSCREEN)
+        if w == 0 or h == 0:
+            w, h = int(js.window.innerWidth), int(js.window.innerHeight)
+            full = True
+        message = js.prepareScreen(w, h, full)
+        if message:
+            raise pygame.error(message)
+        flags &= ~(pygame.FULLSCREEN | pygame.SCALED)
+        return original((w, h), flags, *args, **kwargs)
+
+    pygame.display.set_mode = set_mode
+    pygame.time.Clock = _Clock
+    pygame._editor_ready = True
+
 async def __frame():
-    # 画面を更新する時間をブラウザに渡す
-    await asyncio.sleep(0)
+    # 画面の更新とタッチの処理をする時間をブラウザに渡す
+    await asyncio.sleep(max(_next - time.perf_counter(), 0.004))
     if _stop:
         raise _Stop
 
@@ -137,9 +220,15 @@ def _prepare(source):
     return compile(tree, "main.py", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
 async def run_user(source):
-    global _stop
+    global _stop, _next
     _stop = False
+    _next = 0.0
     try:
+        try:
+            import pygame
+            _install(pygame)
+        except ImportError:
+            pass
         env = {"__name__": "__main__", "__frame": __frame}
         result = eval(_prepare(source), env)
         if inspect.isawaitable(result):
@@ -223,6 +312,58 @@ const native = window.webkit?.messageHandlers;
 code.value = window.nativeCode ?? $("sample").textContent;
 const autosave = () => native?.autosave.postMessage(code.value);
 
+// ---- 設定 ----
+const COLOR_NAMES = { bg: "背景", fg: "ふつうの文字", keyword: "キーワード（if など）", string: "文字列", number: "数字", func: "関数・ボタン", builtin: "組み込み・記号", comment: "コメント" };
+const THEMES = {
+  "One Dark Pro Flat": { bg: "#282c34", fg: "#abb2bf", keyword: "#c678dd", string: "#98c379", number: "#d19a66", func: "#61afef", builtin: "#56b6c2", comment: "#7f848e", type: "#e5c07b", self: "#e06c75" },
+  "ライト": { bg: "#fafafa", fg: "#383a42", keyword: "#a626a4", string: "#3d7f3c", number: "#986801", func: "#2f66d0", builtin: "#0b7285", comment: "#808189", type: "#a36f00", self: "#ca3e35" },
+  "Monokai風": { bg: "#272822", fg: "#f8f8f2", keyword: "#f92672", string: "#e6db74", number: "#ae81ff", func: "#a6e22e", builtin: "#66d9ef", comment: "#8f8a73", type: "#66d9ef", self: "#fd971f" },
+  "ブラック": { bg: "#000000", fg: "#d4d4d4", keyword: "#c586c0", string: "#ce9178", number: "#b5cea8", func: "#4fc1ff", builtin: "#4ec9b0", comment: "#6a9955", type: "#dcdcaa", self: "#f44747" }
+};
+const DEFAULTS = { theme: "One Dark Pro Flat", colors: {}, size: 16, pair: true, complete: true, min: 1, dot: true };
+let config = { ...DEFAULTS };
+try { config = { ...DEFAULTS, ...JSON.parse(window.nativeSettings || "{}") }; } catch (e) {}
+if (!THEMES[config.theme]) config.theme = DEFAULTS.theme;
+const lineHeight = () => Math.round(config.size * 1.5);
+const palette = () => ({ ...THEMES[config.theme], ...config.colors });
+function applySettings() {
+  const colors = palette(), root = document.documentElement.style;
+  for (const [k, v] of Object.entries(colors)) root.setProperty("--" + k, v);
+  root.setProperty("--line", "color-mix(in srgb, var(--fg) 18%, var(--bg))");
+  root.setProperty("--size", config.size + "px");
+  root.setProperty("--lh", lineHeight() + "px");
+  const n = parseInt(colors.bg.slice(1), 16);
+  const dark = (n >> 16) * .299 + ((n >> 8) & 255) * .587 + (n & 255) * .114 < 140;
+  root.colorScheme = dark ? "dark" : "light";
+  // 上下の余白の色もアプリ側で合わせる
+  native?.appearance?.postMessage(JSON.stringify({ bg: colors.bg, dark }));
+}
+function saveSettings() { applySettings(); native?.settings?.postMessage(JSON.stringify(config)); }
+function fillForm() {
+  $("theme").value = config.theme;
+  for (const k in COLOR_NAMES) $("color-" + k).value = palette()[k];
+  for (const k of ["size", "min"]) $(k).value = config[k];
+  for (const k of ["pair", "complete", "dot"]) $(k).checked = config[k];
+}
+function setupForm() {
+  for (const name in THEMES) $("theme").add(new Option(name));
+  for (const s of [12, 14, 16, 18, 20, 22, 24]) $("size").add(new Option(s, s));
+  for (const s of [1, 2, 3, 4, 5]) $("min").add(new Option(s + "文字目", s));
+  for (const [k, text] of Object.entries(COLOR_NAMES)) {
+    const label = document.createElement("label"), input = document.createElement("input");
+    input.type = "color"; input.id = "color-" + k;
+    input.oninput = () => { config.colors = { ...config.colors, [k]: input.value }; saveSettings(); };
+    label.append(text, input);
+    $("colors").append(label);
+  }
+  $("theme").onchange = () => { config.theme = $("theme").value; config.colors = {}; saveSettings(); fillForm(); };
+  $("reset").onclick = () => { config.colors = {}; saveSettings(); fillForm(); };
+  for (const k of ["size", "min"]) $(k).onchange = () => { config[k] = Number($(k).value); saveSettings(); render(); };
+  for (const k of ["pair", "complete", "dot"]) $(k).onchange = () => { config[k] = $(k).checked; saveSettings(); };
+  $("gear").onclick = () => { hidePopup(); code.blur(); fillForm(); $("settings").showModal(); };
+  $("close").onclick = () => $("settings").close();
+}
+
 // ---- 色分け ----
 const KEYWORDS = new Set("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield match case".split(" "));
 const BUILTINS = new Set("abs all any bool bytes chr dict dir divmod enumerate filter float format getattr hasattr hex input int isinstance iter len list map max min next object open ord pow print range repr reversed round set setattr slice sorted str sum super tuple type zip".split(" "));
@@ -287,7 +428,8 @@ function suggest() {
   const before = code.value.slice(0, pos);
   const m = before.match(/(?:([\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*)\.)?([\p{L}_][\p{L}\p{N}_]*)?$/u);
   const base = m[1] || "", prefix = m[2] || "";
-  if ((!base && !prefix) || /\w/.test(code.value[pos] || "") || inStringOrComment(before)) return hidePopup();
+  const enough = base && !prefix ? config.dot : prefix.length >= config.min;
+  if (!config.complete || !enough || (!base && !prefix) || /\w/.test(code.value[pos] || "") || inStringOrComment(before)) return hidePopup();
   if (!base && before[before.length - prefix.length - 1] === ".") return hidePopup();
   items = JSON.parse(pyComplete(code.value, base, prefix));
   if (!items.length) return hidePopup();
@@ -312,11 +454,11 @@ function place(before) {
   const lines = before.split("\n");
   $("measure").textContent = lines[lines.length - 1];
   const box = $("editor"), left = $("gutter").offsetWidth + 8 + $("measure").offsetWidth - code.scrollLeft;
-  const top = 8 + lines.length * 24 - code.scrollTop;
+  const lh = lineHeight(), top = 8 + lines.length * lh - code.scrollTop;
   popup.style.left = Math.max(4, Math.min(left, box.clientWidth - popup.offsetWidth - 4)) + "px";
   // 下に入らないときは、カーソルの上に出す
-  const above = top + popup.offsetHeight > box.clientHeight && top - 24 > popup.offsetHeight;
-  popup.style.top = (above ? top - 24 - popup.offsetHeight : top) + "px";
+  const above = top + popup.offsetHeight > box.clientHeight && top - lh > popup.offsetHeight;
+  popup.style.top = (above ? top - lh - popup.offsetHeight : top) + "px";
 }
 function mark() {
   [...popup.children].forEach((el, i) => el.classList.toggle("on", i === selected));
@@ -335,6 +477,52 @@ code.addEventListener("compositionend", () => setTimeout(suggest));
 code.addEventListener("scroll", () => { syncScroll(); hidePopup(); });
 code.addEventListener("click", hidePopup);
 code.addEventListener("blur", hidePopup);
+// ---- かっこ・引用符の自動入力 ----
+const PAIRS = { "(": ")", "[": "]", "{": "}", '"': '"', "'": "'" };
+// iPadのキーボードが出す曲がった引用符は、まっすぐなものに直す
+const STRAIGHT = { "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"' };
+// カーソルが文字列の中なら引用符を、コメントの中なら "#" を返す
+function context(before) {
+  if (!inStringOrComment(before)) return "";
+  const last = [...before.matchAll(TOKEN)].pop();
+  return last[1] ? "#" : last[2].replace(/^[a-zA-Z]+/, "")[0];
+}
+function move(pos) { code.setSelectionRange(pos, pos); }
+function insertAround(text, back) {
+  insert(text);
+  move(code.selectionStart - back);
+  suggest();
+}
+let editing = false;
+code.addEventListener("beforeinput", e => {
+  if (editing || e.isComposing || e.inputType !== "insertText" || !e.data || e.data.length !== 1) return;
+  const ch = STRAIGHT[e.data] || e.data, changed = ch !== e.data;
+  const start = code.selectionStart, end = code.selectionEnd;
+  const before = code.value.slice(0, start), next = code.value[end] || "";
+  const quote = ch === '"' || ch === "'", where = context(before);
+  const run = fn => { e.preventDefault(); editing = true; try { fn(); } finally { editing = false; } };
+  // すでにある閉じる文字は、飛びこえるだけ
+  if (config.pair && start === end && next === ch && (")]}".includes(ch) || (quote && where !== "#")))
+    return run(() => { move(start + 1); hidePopup(); });
+  if (where) {
+    if (changed && where === ch) run(() => insert(ch));
+    return;
+  }
+  if (config.pair && PAIRS[ch]) {
+    if (start !== end) {  // 選んだ文字を囲む
+      const text = code.value.slice(start, end);
+      return run(() => { insert(ch + text + PAIRS[ch]); code.setSelectionRange(start + 1, end + 1); hidePopup(); });
+    }
+    const free = !next || /[\s)\]},:.]/.test(next);
+    if (quote) {
+      if (before.endsWith(ch + ch) && free) return run(() => insertAround(ch.repeat(4), 3));
+      const word = before.match(/[\p{L}\p{N}_]*$/u)[0];
+      if (free && (!word || /^(?:[rubf]|rb|br|rf|fr)$/i.test(word))) return run(() => insertAround(ch + ch, 1));
+    } else if (free) return run(() => insertAround(ch + PAIRS[ch], 1));
+  }
+  if (changed) run(() => insert(ch));
+});
+
 code.addEventListener("keydown", e => {
   if (e.isComposing) return;
   if (!popup.hidden) {
@@ -353,8 +541,18 @@ code.addEventListener("keydown", e => {
   else if (e.key === "Enter") {
     e.preventDefault();
     let indent = line.match(/^ */)[0];
-    if (line.trimEnd().endsWith(":")) indent += "    ";
-    insert("\n" + indent);
+    const open = before.slice(-1), close = code.value[code.selectionEnd];
+    if (config.pair && "([{".includes(open) && open && PAIRS[open] === close) {
+      insertAround("\n" + indent + "    \n" + indent, indent.length + 1);
+    } else {
+      if (line.trimEnd().endsWith(":")) indent += "    ";
+      insert("\n" + indent);
+    }
+  } else if (e.key === "Backspace" && config.pair && pos === code.selectionEnd && PAIRS[code.value[pos - 1]] && PAIRS[code.value[pos - 1]] === code.value[pos]) {
+    // 中が空のかっこは、まとめて消す
+    e.preventDefault();
+    code.setSelectionRange(pos - 1, pos + 1);
+    if (!document.execCommand("delete")) { code.setRangeText(""); code.dispatchEvent(new Event("input")); }
   } else if (e.key === "Backspace" && pos === code.selectionEnd && line.length && /^ +$/.test(line)) {
     // 行の先頭の空白は、4文字ずつ消す
     e.preventDefault();
@@ -362,6 +560,24 @@ code.addEventListener("keydown", e => {
     if (!document.execCommand("delete")) { code.setRangeText(""); code.dispatchEvent(new Event("input")); }
   }
 });
+
+// ---- ゲーム画面の大きさ ----
+// Pythonの set_mode から呼ばれる。問題があれば説明の文を返す
+window.prepareScreen = (w, h, forceFull) => {
+  const ratio = window.devicePixelRatio || 1;
+  const long = Math.round(Math.max(screen.width, screen.height) * ratio);
+  const short = Math.round(Math.min(screen.width, screen.height) * ratio);
+  const wide = window.innerWidth >= window.innerHeight;
+  const maxW = wide ? long : short, maxH = wide ? short : long;
+  if (w > maxW || h > maxH)
+    return `画面サイズ ${w}×${h} は大きすぎます。今の向きでは ${maxW}×${maxH} までにしてください。`;
+  document.body.classList.remove("full");
+  $("panel").hidden = false;
+  const area = $("screen");
+  const full = forceFull || w > area.clientWidth - 16 || h > area.clientHeight - 16;
+  document.body.classList.toggle("full", full);
+  return "";
+};
 
 // ---- ボタン ----
 const showPanel = show => { $("panel").hidden = !show; hidePopup(); };
@@ -401,6 +617,7 @@ async function start() {
       $("run").classList.toggle("running", on);
       $("run").setAttribute("aria-label", on ? "停止" : "実行");
       status.textContent = on ? "実行中" : "準備OK";
+      if (!on) document.body.classList.remove("full");
     };
     $("run").onclick = async () => {
       if (running) return stopUser();
@@ -410,7 +627,7 @@ async function start() {
       showPanel(true);
       $("canvas").focus();
       try {
-        await py.loadPackagesFromImports(code.value).catch(() => {});
+        await py.loadPackagesFromImports(code.value, { messageCallback: () => {} }).catch(() => {});
         await runUser(code.value);
       } catch (e) {
         log(String(e));
@@ -418,6 +635,7 @@ async function start() {
         setRunning(false);
       }
     };
+    $("exit").onclick = () => stopUser();
     $("canvas").addEventListener("pointerdown", () => $("canvas").focus());
     $("run").disabled = false;
     status.textContent = "準備OK";
@@ -427,6 +645,8 @@ async function start() {
     log(String(e));
   }
 }
+setupForm();
+applySettings();
 render();
 start();
 </script>
