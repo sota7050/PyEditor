@@ -3,40 +3,68 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Pygame エディタ</title>
 <style>
 * { box-sizing: border-box; }
-body { margin: 0; height: 100dvh; display: flex; flex-direction: column; background: #1e1e1e; color: #eee; font-family: sans-serif; }
-header, #keys { display: flex; gap: 6px; padding: 8px; flex-wrap: wrap; align-items: center; }
-button { font-size: 16px; padding: 8px 14px; border: 0; border-radius: 6px; background: #3a3a3a; color: #fff; }
-button:disabled { opacity: .4; }
-#run { background: #2e7d32; }
-#stop { background: #c62828; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { height: 100dvh; display: flex; flex-direction: column; background: #282c34; color: #abb2bf; font-family: -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }
+header { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid #3e4452; }
+header .title { flex: 1; text-align: center; min-width: 0; }
+#name { font-weight: 600; color: #d7dae0; }
+#status { font-size: 12px; color: #7f848e; }
+header button { width: 44px; height: 44px; border: 0; background: none; color: #61afef; display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; }
+header button:active { background: #3e4452; }
+header button:disabled { opacity: .35; }
+svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#run svg { fill: currentColor; stroke: none; width: 26px; height: 26px; }
+#run { color: #98c379; }
+#run.running { color: #e06c75; }
+#run .stop, #run.running .play { display: none; }
+#run.running .stop { display: block; }
 main { flex: 1; display: flex; min-height: 0; }
-section { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-#code { flex: 1; width: 100%; resize: none; border: 0; padding: 10px; background: #111; color: #eee; font: 16px/1.5 Menlo, monospace; white-space: pre; tab-size: 4; }
-#screen { flex: 2; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 8px; }
-#canvas { max-width: 100%; height: auto !important; background: #000; touch-action: none; }
-#out { flex: 1; overflow: auto; margin: 0; padding: 10px; background: #000; white-space: pre-wrap; }
-@media (orientation: portrait) { main { flex-direction: column; } }
+#editor { flex: 1; display: flex; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+#code, #hl, #nums, #measure { font-family: Menlo, ui-monospace, monospace; font-size: 16px; line-height: 24px; tab-size: 4; font-variant-ligatures: none; letter-spacing: 0; }
+#gutter { width: 48px; overflow: hidden; flex: none; }
+#nums { margin: 0; padding: 8px 10px 8px 0; text-align: right; color: #495162; }
+#area { flex: 1; position: relative; overflow: hidden; min-width: 0; }
+#hl { position: absolute; top: 0; left: 0; margin: 0; padding: 8px; white-space: pre; pointer-events: none; min-width: 100%; }
+#code { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 8px; border: 0; outline: 0; resize: none; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: #528bff; white-space: pre; overflow-wrap: normal; overflow: auto; }
+#code::selection { background: rgba(103,118,150,.4); }
+#measure { position: absolute; visibility: hidden; white-space: pre; top: 0; left: 0; }
+.k { color: #c678dd; } .s { color: #98c379; } .c { color: #7f848e; } .n { color: #d19a66; }
+.f { color: #61afef; } .b { color: #56b6c2; } .t { color: #e5c07b; } .v { color: #e06c75; } .o { color: #56b6c2; }
+#popup { position: absolute; z-index: 10; width: 300px; max-width: calc(100% - 8px); max-height: 192px; overflow-y: auto; background: #282c34; border: 1px solid #4b5263; border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+#popup div { display: flex; justify-content: space-between; gap: 12px; padding: 0 10px; height: 38px; align-items: center; font: 15px Menlo, ui-monospace, monospace; cursor: pointer; }
+#popup div.on { background: #3e4452; color: #fff; }
+#popup small { color: #7f848e; font-family: -apple-system, sans-serif; white-space: nowrap; }
+#panel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid #3e4452; }
+#panel[hidden], #popup[hidden] { display: none; }
+#screen { flex: 2; overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 8px; min-height: 0; }
+#canvas { max-width: 100%; max-height: 100%; object-fit: contain; background: #000; touch-action: none; outline: 0; }
+#out { flex: 1; overflow: auto; margin: 0; padding: 10px; border-top: 1px solid #3e4452; white-space: pre-wrap; font: 14px/1.5 Menlo, ui-monospace, monospace; }
+@media (orientation: portrait) { main { flex-direction: column; } #panel { border-left: 0; border-top: 1px solid #3e4452; } }
 </style>
 </head>
 <body>
 <header>
-  <button id="run" disabled>▶ 実行</button>
-  <button id="stop" disabled>■ 停止</button>
-  <button id="open">開く</button>
-  <button id="save">ファイルに保存</button>
+  <button id="open" aria-label="開く"><svg viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/></svg></button>
+  <button id="save" aria-label="ファイルに保存"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 12v8h14v-8"/></svg></button>
+  <div class="title"><div id="name">main.py</div><div id="status">準備中…</div></div>
+  <button id="toggle" aria-label="実行画面の表示を切りかえる"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg></button>
+  <button id="run" aria-label="実行" disabled><svg class="play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg><svg class="stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
   <input id="file" type="file" accept=".py,text/plain" hidden>
-  <span id="status">準備中…</span>
 </header>
-<div id="keys"></div>
 <main>
-  <section>
-    <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
-  </section>
-  <section>
+  <div id="editor">
+    <div id="gutter"><pre id="nums"></pre></div>
+    <div id="area">
+      <pre id="hl" aria-hidden="true"></pre>
+      <textarea id="code" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+    </div>
+    <div id="popup" hidden></div>
+    <span id="measure"></span>
+  </div>
+  <section id="panel" hidden>
     <div id="screen"><canvas id="canvas" tabindex="0" width="400" height="300"></canvas></div>
     <pre id="out"></pre>
   </section>
@@ -135,50 +163,216 @@ def stop_user():
     _stop = True
 </script>
 
+<script type="text/plain" id="completer">
+import builtins, importlib, keyword, json, re
+
+_MODULES = {"pygame", "math", "random", "time", "sys", "os", "asyncio", "json",
+            "datetime", "collections", "itertools", "re", "string", "copy"}
+
+def complete(source, base, prefix):
+    found = {}
+    if base:
+        # 「pygame.draw.」のような、ドットの後ろの候補
+        aliases = {}
+        for m in re.finditer(r"^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?", source, re.M):
+            name, alias = m.group(1), m.group(2)
+            if alias:
+                aliases[alias] = name
+            else:
+                top = name.split(".")[0]
+                aliases[top] = top
+        first, *rest = base.split(".")
+        target = aliases.get(first)
+        if target and target.split(".")[0] in _MODULES:
+            try:
+                obj = importlib.import_module(target)
+                for part in rest:
+                    obj = getattr(obj, part)
+                for n in dir(obj):
+                    if not n.startswith("_"):
+                        value = getattr(obj, n, None)
+                        found[n] = "関数" if callable(value) else "属性"
+            except Exception:
+                pass
+    else:
+        for n in keyword.kwlist:
+            found[n] = "キーワード"
+        for n in dir(builtins):
+            if not n.startswith("_"):
+                found[n] = "組み込み"
+        for n in re.findall(r"\b[^\W\d]\w*", source):
+            if n != prefix:
+                found.setdefault(n, "このコード内")
+    low = prefix.lower()
+    names = [n for n in found if n.lower().startswith(low) and n != prefix]
+    order = {"このコード内": 0, "組み込み": 1, "キーワード": 1}
+    common = ["print", "range", "import", "if", "for", "while", "def"]
+    names.sort(key=lambda n: (not n.startswith(prefix), order.get(found[n], 1),
+                              common.index(n) if n in common else 99, len(n), n))
+    return json.dumps([[n, found[n]] for n in names[:30]], ensure_ascii=False)
+</script>
+
 <script src="pyodide/pyodide.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const code = $("code"), out = $("out"), status = $("status");
+const code = $("code"), out = $("out"), status = $("status"), popup = $("popup");
 const log = text => { out.textContent = (out.textContent + text + "\n").slice(-20000); out.scrollTop = out.scrollHeight; };
 
 // アプリ側(Swift)とのやりとり
 const native = window.webkit?.messageHandlers;
-const saved = window.nativeCode ?? null;
-code.value = saved ?? $("sample").textContent;
+code.value = window.nativeCode ?? $("sample").textContent;
 const autosave = () => native?.autosave.postMessage(code.value);
-code.addEventListener("input", autosave);
 
+// ---- 色分け ----
+const KEYWORDS = new Set("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield match case".split(" "));
+const BUILTINS = new Set("abs all any bool bytes chr dict dir divmod enumerate filter float format getattr hasattr hex input int isinstance iter len list map max min next object open ord pow print range repr reversed round set setattr slice sorted str sum super tuple type zip".split(" "));
+const TOKEN = /(#[^\n]*)|((?:\b[rRbBfFuU]{1,2})?(?:"""[\s\S]*?(?:"""|$)|\x27\x27\x27[\s\S]*?(?:\x27\x27\x27|$)|"(?:\\.|[^"\\\n])*"?|\x27(?:\\.|[^\x27\\\n])*\x27?))|(\b\d[\w.]*)|([\p{L}_][\p{L}\p{N}_]*)|([+\-*\/%=<>!&|^~]+)/gu;
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+function highlight(src) {
+  let html = "", last = 0, prev = "";
+  for (const m of src.matchAll(TOKEN)) {
+    html += esc(src.slice(last, m.index));
+    const [t, com, str, num, word] = m;
+    let cls = com ? "c" : str ? "s" : num ? "n" : word ? "" : "o";
+    if (word) {
+      const call = /^\s*\(/.test(src.slice(m.index + t.length, m.index + t.length + 20));
+      if (word === "True" || word === "False" || word === "None") cls = "n";
+      else if (KEYWORDS.has(word)) cls = "k";
+      else if (prev === "class") cls = "t";
+      else if (prev === "def") cls = "f";
+      else if (word === "self") cls = "v";
+      else if (BUILTINS.has(word) && src[m.index - 1] !== ".") cls = "b";
+      else if (call) cls = "f";
+      prev = word;
+    }
+    html += cls ? `<span class="${cls}">${esc(t)}</span>` : esc(t);
+    last = m.index + t.length;
+  }
+  return html + esc(src.slice(last));
+}
+function syncScroll() {
+  $("hl").style.transform = `translate(${-code.scrollLeft}px, ${-code.scrollTop}px)`;
+  $("nums").style.transform = `translateY(${-code.scrollTop}px)`;
+}
+function render() {
+  $("hl").innerHTML = highlight(code.value) + "\n ";
+  $("nums").textContent = code.value.split("\n").map((_, i) => i + 1).join("\n");
+  syncScroll();
+}
+
+// ---- 入力補完 ----
+let pyComplete = null, items = [], selected = 0, wordLength = 0;
+function hidePopup() { popup.hidden = true; items = []; }
 function insert(text) {
-  code.setRangeText(text, code.selectionStart, code.selectionEnd, "end");
+  // execCommandを使うと「元に戻す」が効く
+  if (!document.execCommand("insertText", false, text)) {
+    code.setRangeText(text, code.selectionStart, code.selectionEnd, "end");
+    code.dispatchEvent(new Event("input"));
+  }
+}
+function inStringOrComment(before) {
+  for (const m of before.matchAll(TOKEN)) {
+    if ((m[1] || m[2]) && m.index + m[0].length === before.length) {
+      if (m[1]) return true;
+      const q = m[2].replace(/^[a-zA-Z]+/, "");
+      const mark = q.startsWith(q[0].repeat(3)) ? q[0].repeat(3) : q[0];
+      return !(q.length >= mark.length * 2 && q.endsWith(mark));
+    }
+  }
+  return false;
+}
+function suggest() {
+  const pos = code.selectionStart;
+  if (!pyComplete || pos !== code.selectionEnd || document.activeElement !== code) return hidePopup();
+  const before = code.value.slice(0, pos);
+  const m = before.match(/(?:([\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*)\.)?([\p{L}_][\p{L}\p{N}_]*)?$/u);
+  const base = m[1] || "", prefix = m[2] || "";
+  if ((!base && !prefix) || /\w/.test(code.value[pos] || "") || inStringOrComment(before)) return hidePopup();
+  if (!base && before[before.length - prefix.length - 1] === ".") return hidePopup();
+  items = JSON.parse(pyComplete(code.value, base, prefix));
+  if (!items.length) return hidePopup();
+  selected = 0;
+  wordLength = prefix.length;
+  popup.replaceChildren(...items.map(([name, kind], i) => {
+    const row = document.createElement("div");
+    const a = document.createElement("span"), b = document.createElement("small");
+    a.textContent = name; b.textContent = kind;
+    row.append(a, b);
+    row.addEventListener("pointerdown", e => e.preventDefault());
+    row.addEventListener("mousedown", e => e.preventDefault());
+    row.onclick = () => accept(i);
+    return row;
+  }));
+  popup.hidden = false;
+  popup.scrollTop = 0;
+  mark();
+  place(before);
+}
+function place(before) {
+  const lines = before.split("\n");
+  $("measure").textContent = lines[lines.length - 1];
+  const box = $("editor"), left = $("gutter").offsetWidth + 8 + $("measure").offsetWidth - code.scrollLeft;
+  const top = 8 + lines.length * 24 - code.scrollTop;
+  popup.style.left = Math.max(4, Math.min(left, box.clientWidth - popup.offsetWidth - 4)) + "px";
+  // 下に入らないときは、カーソルの上に出す
+  const above = top + popup.offsetHeight > box.clientHeight && top - 24 > popup.offsetHeight;
+  popup.style.top = (above ? top - 24 - popup.offsetHeight : top) + "px";
+}
+function mark() {
+  [...popup.children].forEach((el, i) => el.classList.toggle("on", i === selected));
+  popup.children[selected]?.scrollIntoView({ block: "nearest" });
+}
+function accept(i) {
+  const name = items[i][0];
   code.focus();
-  autosave();
+  code.setSelectionRange(code.selectionStart - wordLength, code.selectionStart);
+  insert(name);
+  hidePopup();
 }
-for (const k of ["字下げ", "(", ")", "[", "]", ":", "=", '"', "'", "_", "#"]) {
-  const b = document.createElement("button");
-  b.textContent = k;
-  b.addEventListener("pointerdown", e => e.preventDefault());
-  b.onclick = () => insert(k === "字下げ" ? "    " : k);
-  $("keys").appendChild(b);
-}
+
+code.addEventListener("input", e => { render(); autosave(); if (e.inputType?.startsWith("delete") || e.inputType === "insertText") suggest(); else hidePopup(); });
+code.addEventListener("compositionend", () => setTimeout(suggest));
+code.addEventListener("scroll", () => { syncScroll(); hidePopup(); });
+code.addEventListener("click", hidePopup);
+code.addEventListener("blur", hidePopup);
 code.addEventListener("keydown", e => {
   if (e.isComposing) return;
+  if (!popup.hidden) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      selected = (selected + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      return mark();
+    }
+    if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); return accept(selected); }
+    if (e.key === "Escape") { e.preventDefault(); return hidePopup(); }
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") hidePopup();
+  }
+  const pos = code.selectionStart, before = code.value.slice(0, pos);
+  const line = before.slice(before.lastIndexOf("\n") + 1);
   if (e.key === "Tab") { e.preventDefault(); insert("    "); }
-  if (e.key === "Enter") {
+  else if (e.key === "Enter") {
     e.preventDefault();
-    const before = code.value.slice(0, code.selectionStart);
-    const line = before.slice(before.lastIndexOf("\n") + 1);
     let indent = line.match(/^ */)[0];
     if (line.trimEnd().endsWith(":")) indent += "    ";
     insert("\n" + indent);
+  } else if (e.key === "Backspace" && pos === code.selectionEnd && line.length && /^ +$/.test(line)) {
+    // 行の先頭の空白は、4文字ずつ消す
+    e.preventDefault();
+    code.setSelectionRange(pos - ((line.length - 1) % 4 + 1), pos);
+    if (!document.execCommand("delete")) { code.setRangeText(""); code.dispatchEvent(new Event("input")); }
   }
 });
 
+// ---- ボタン ----
+const showPanel = show => { $("panel").hidden = !show; hidePopup(); };
+$("toggle").onclick = () => showPanel($("panel").hidden);
 $("open").onclick = () => $("file").click();
 $("file").onchange = async e => {
   const f = e.target.files[0];
   if (f && confirm("今のプログラムを、選んだファイルに置きかえますか？")) {
     code.value = await f.text();
-    autosave();
+    $("name").textContent = f.name;
+    render(); autosave();
   }
   e.target.value = "";
 };
@@ -196,12 +390,24 @@ async function start() {
     const runUser = py.globals.get("run_user");
     const stopUser = py.globals.get("stop_user");
 
+    // 入力補完は、実行するコードとは別の場所に読み込む
+    const space = py.globals.get("dict")();
+    py.runPython($("completer").textContent, { globals: space });
+    pyComplete = space.get("complete");
+
+    let running = false;
+    const setRunning = on => {
+      running = on;
+      $("run").classList.toggle("running", on);
+      $("run").setAttribute("aria-label", on ? "停止" : "実行");
+      status.textContent = on ? "実行中" : "準備OK";
+    };
     $("run").onclick = async () => {
-      $("run").disabled = true;
-      $("stop").disabled = false;
+      if (running) return stopUser();
+      setRunning(true);
       out.textContent = "";
-      status.textContent = "実行中";
       code.blur();
+      showPanel(true);
       $("canvas").focus();
       try {
         await py.loadPackagesFromImports(code.value).catch(() => {});
@@ -209,20 +415,19 @@ async function start() {
       } catch (e) {
         log(String(e));
       } finally {
-        $("run").disabled = false;
-        $("stop").disabled = true;
-        status.textContent = "準備OK";
+        setRunning(false);
       }
     };
-    $("stop").onclick = () => stopUser();
     $("canvas").addEventListener("pointerdown", () => $("canvas").focus());
     $("run").disabled = false;
     status.textContent = "準備OK";
   } catch (e) {
     status.textContent = "読み込みに失敗しました";
+    showPanel(true);
     log(String(e));
   }
 }
+render();
 start();
 </script>
 </body>
