@@ -5,7 +5,10 @@ import UIKit
 @main
 struct PyEditorApp: App {
     var body: some Scene {
-        WindowGroup { EditorView() }
+        WindowGroup {
+            // 画面の端まで背景を広げる(キーボードはよける)
+            EditorView().ignoresSafeArea(.container, edges: .all)
+        }
     }
 }
 
@@ -43,7 +46,7 @@ final class EditorController: UIViewController, WKScriptMessageHandler, WKUIDele
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = color(UserDefaults.standard.string(forKey: "background") ?? "#282c34")
         let config = WKWebViewConfiguration()
         config.setURLSchemeHandler(LocalFiles(), forURLScheme: "app")
 
@@ -55,20 +58,72 @@ final class EditorController: UIViewController, WKScriptMessageHandler, WKUIDele
                 source: "window.nativeCode = \(text);",
                 injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
+        if let settings = UserDefaults.standard.string(forKey: "settings"),
+           let json = try? JSONEncoder().encode(settings),
+           let text = String(data: json, encoding: .utf8) {
+            config.userContentController.addUserScript(WKUserScript(
+                source: "window.nativeSettings = \(text);",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+        config.userContentController.add(self, name: "settings")
+        config.userContentController.add(self, name: "appearance")
         config.userContentController.add(self, name: "autosave")
         config.userContentController.add(self, name: "exportFile")
 
-        webView = WKWebView(frame: view.bounds, configuration: config)
+        webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
-        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
+        // 文字やボタンは、時計などと重ならない範囲に置く
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: safe.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: safe.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: safe.trailingAnchor)
+        ])
         webView.load(URLRequest(url: URL(string: "app://local/index.html")!))
+    }
+
+    private var isDark = true
+
+    // "#rrggbb" を色に変える
+    private func color(_ hex: String) -> UIColor {
+        let n = UInt32(hex.dropFirst(), radix: 16) ?? 0x282c34
+        return UIColor(red: CGFloat((n >> 16) & 255) / 255,
+                       green: CGFloat((n >> 8) & 255) / 255,
+                       blue: CGFloat(n & 255) / 255, alpha: 1)
+    }
+
+    private func applyStyle() {
+        // 時計などの文字の色を、背景に合わせる
+        view.window?.overrideUserInterfaceStyle = isDark ? .dark : .light
+        view.window?.backgroundColor = view.backgroundColor
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        applyStyle()
     }
 
     func userContentController(_ controller: WKUserContentController,
                                didReceive message: WKScriptMessage) {
         guard let code = message.body as? String else { return }
-        if message.name == "autosave" {
+        if message.name == "settings" {
+            UserDefaults.standard.set(code, forKey: "settings")
+        } else if message.name == "appearance" {
+            guard let data = code.data(using: .utf8),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let bg = value["bg"] as? String else { return }
+            UserDefaults.standard.set(bg, forKey: "background")
+            view.backgroundColor = color(bg)
+            isDark = value["dark"] as? Bool ?? true
+            applyStyle()
+        } else if message.name == "autosave" {
             UserDefaults.standard.set(code, forKey: "code")
         } else {
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("main.py")
