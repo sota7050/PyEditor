@@ -1,321 +1,295 @@
 import SwiftUI
-import WebKit
 import UIKit
-import UniformTypeIdentifiers
 
 @main
 struct PyEditorApp: App {
+    @StateObject private var model = AppModel()
+
     var body: some Scene {
         WindowGroup {
-            // 画面の端まで背景を広げる(キーボードをよける処理は下のUIKit側で行う)
-            EditorView().ignoresSafeArea()
+            ContentView(model: model, runner: model.runner)
         }
     }
 }
 
-struct EditorView: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> EditorController { EditorController() }
-    func updateUIViewController(_ controller: EditorController, context: Context) {}
-}
+struct ContentView: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var runner: Runner
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var showSettings = false
 
-// アプリ内のファイルを app://local/... としてWeb画面に渡す
-final class LocalFiles: NSObject, WKURLSchemeHandler {
-    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
-        guard let url = task.request.url, let root = Bundle.main.resourceURL else { return }
-        let file = root.appendingPathComponent("www" + url.path)
-        guard let data = try? Data(contentsOf: file) else {
-            task.didFailWithError(URLError(.fileDoesNotExist))
-            return
-        }
-        let types = ["html": "text/html; charset=utf-8", "js": "text/javascript",
-                     "mjs": "text/javascript", "wasm": "application/wasm",
-                     "json": "application/json"]
-        let headers = ["Content-Type": types[file.pathExtension] ?? "application/octet-stream",
-                       "Content-Length": String(data.count),
-                       "Access-Control-Allow-Origin": "*"]
-        let response = HTTPURLResponse(url: url, statusCode: 200,
-                                       httpVersion: "HTTP/1.1", headerFields: headers)!
-        task.didReceive(response)
-        task.didReceive(data)
-        task.didFinish()
-    }
-    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
-}
-
-final class EditorController: UIViewController, WKScriptMessageHandler, WKUIDelegate {
-    private var webView: WKWebView!
-    private let files = FileBridge()
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = color(UserDefaults.standard.string(forKey: "background") ?? "#282c34")
-        let config = WKWebViewConfiguration()
-        config.setURLSchemeHandler(LocalFiles(), forURLScheme: "app")
-
-        // 保存してある内容をWeb画面に渡す
-        let values = [("nativeCode", "code"), ("nativeSettings", "settings"),
-                      ("nativeWorkspace", "workspace")]
-        for (name, key) in values {
-            if let value = UserDefaults.standard.string(forKey: key),
-               let json = try? JSONEncoder().encode(value),
-               let text = String(data: json, encoding: .utf8) {
-                config.userContentController.addUserScript(WKUserScript(
-                    source: "window.\(name) = \(text);",
-                    injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    var body: some View {
+        let settings = model.settings
+        ZStack {
+            // 上下の余白やキーボードの周りも、同じ色にする
+            settings.color("bg").ignoresSafeArea()
+            if runner.fullScreen {
+                // 上下の余白も暗くする
+                Color.black.opacity(0.6).ignoresSafeArea()
+            }
+            GeometryReader { proxy in
+                workspace(size: proxy.size)
             }
         }
-        config.userContentController.add(self, name: "settings")
-        config.userContentController.add(self, name: "appearance")
-        config.userContentController.add(self, name: "state")
-        files.presenter = self
-        config.userContentController.addScriptMessageHandler(files, contentWorld: .page, name: "files")
-
-        webView = WKWebView(frame: .zero, configuration: config)
-        webView.uiDelegate = self
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(webView)
-        // 文字やボタンは、時計などと重ならない範囲に置く
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: safe.topAnchor),
-            // キーボードや下のバーが出たときは、その上まで
-            webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: safe.trailingAnchor)
-        ])
-        webView.load(URLRequest(url: URL(string: "app://local/index.html")!))
-    }
-
-    private var isDark = true
-
-    // "#rrggbb" を色に変える
-    private func color(_ hex: String) -> UIColor {
-        let n = UInt32(hex.dropFirst(), radix: 16) ?? 0x282c34
-        return UIColor(red: CGFloat((n >> 16) & 255) / 255,
-                       green: CGFloat((n >> 8) & 255) / 255,
-                       blue: CGFloat(n & 255) / 255, alpha: 1)
-    }
-
-    private func applyStyle() {
-        // 時計などの文字の色を、背景に合わせる
-        view.window?.overrideUserInterfaceStyle = isDark ? .dark : .light
-        view.window?.backgroundColor = view.backgroundColor
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        applyStyle()
-    }
-
-    func userContentController(_ controller: WKUserContentController,
-                               didReceive message: WKScriptMessage) {
-        guard let code = message.body as? String else { return }
-        if message.name == "settings" {
-            UserDefaults.standard.set(code, forKey: "settings")
-        } else if message.name == "appearance" {
-            guard let data = code.data(using: .utf8),
-                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let bg = value["bg"] as? String else { return }
-            UserDefaults.standard.set(bg, forKey: "background")
-            view.backgroundColor = color(bg)
-            isDark = value["dark"] as? Bool ?? true
-            applyStyle()
-        } else if message.name == "state" {
-            UserDefaults.standard.set(code, forKey: "workspace")
+        .foregroundColor(settings.color("fg"))
+        .tint(settings.color("func"))
+        .preferredColorScheme(settings.isDark ? .dark : .light)
+        .sheet(isPresented: $showSettings) {
+            SettingsView(model: model)
+                .preferredColorScheme(model.settings.isDark ? .dark : .light)
+        }
+        .onAppear { model.refresh() }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { model.refresh() } else { model.persist() }
         }
     }
 
-    // お知らせの画面
-    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping () -> Void) {
-        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
-        present(alert, animated: true)
+    // 画面全体の配置。ゲーム画面(WebView)は消さずに、場所と大きさだけを変える
+    private func workspace(size: CGSize) -> some View {
+        let top: CGFloat = 97  // ボタン52 + タブ44 + 線1
+        let landscape = size.width >= size.height
+        let bodyHeight = max(size.height - top, 1)
+        let panelWidth = landscape ? size.width / 2 : size.width
+        let panelHeight = landscape ? bodyHeight : bodyHeight / 2
+        let panelX = landscape ? size.width - panelWidth : 0
+        let panelY = landscape ? top : top + bodyHeight - panelHeight
+        let canvasHeight = panelHeight * 0.65
+        let editorWidth = runner.showPanel && landscape ? size.width - panelWidth : size.width
+        let editorHeight = runner.showPanel && !landscape ? bodyHeight - panelHeight : bodyHeight
+
+        let panelFrame = CGRect(x: panelX, y: panelY, width: panelWidth, height: canvasHeight)
+        let fullFrame = CGRect(origin: .zero, size: size)
+        let webFrame = runner.fullScreen ? fullFrame : panelFrame
+        // 隠すときは、画面の外へ動かす
+        let hiddenShift: CGFloat = runner.showPanel || runner.fullScreen ? 0 : size.width * 2
+
+        return ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                toolbar.frame(height: 52)
+                TabBar(model: model).frame(height: 44)
+                model.settings.color("fg").opacity(0.18).frame(height: 1)
+                EditorArea(model: model)
+                    .frame(width: editorWidth, height: editorHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .background(model.settings.color("bg"))
+
+            if runner.showPanel {
+                console
+                    .frame(width: panelWidth, height: panelHeight - canvasHeight)
+                    .position(x: panelX + panelWidth / 2,
+                              y: panelY + canvasHeight + (panelHeight - canvasHeight) / 2)
+                model.settings.color("fg").opacity(0.18)
+                    .frame(width: landscape ? 1 : panelWidth, height: landscape ? panelHeight : 1)
+                    .position(x: landscape ? panelX : panelWidth / 2,
+                              y: landscape ? panelY + panelHeight / 2 : panelY)
+            }
+
+            if runner.fullScreen {
+                // 後ろのボタンを押せないようにする
+                Color.black.opacity(0.6)
+            }
+
+            RunnerView(runner: runner)
+                .frame(width: webFrame.width, height: webFrame.height)
+                .position(x: webFrame.midX + hiddenShift, y: webFrame.midY)
+
+            if runner.fullScreen {
+                Button { runner.stop() } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.title2)
+                        .foregroundColor(model.settings.color("self"))
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(Color.black.opacity(0.6)))
+                }
+                .position(x: size.width - 32, y: 32)
+            }
+        }
+        .onAppear { runner.setLayout(panel: panelFrame.size, app: size) }
+        .onChange(of: [panelFrame.width, panelFrame.height, size.width, size.height]) { v in
+            runner.setLayout(panel: CGSize(width: v[0], height: v[1]),
+                             app: CGSize(width: v[2], height: v[3]))
+        }
     }
 
-    // 確認の画面(これがないと「開く」が動かない)
-    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping (Bool) -> Void) {
-        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in completionHandler(false) })
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
-        present(alert, animated: true)
+    private var toolbar: some View {
+        let isPython = model.current.isPython
+        return ZStack {
+            VStack(spacing: 0) {
+                Text(model.current.name).font(.headline).lineLimit(1)
+                Text(statusText).font(.caption2)
+                    .foregroundColor(model.settings.color("comment"))
+            }
+            .padding(.horizontal, 190)
+
+            HStack(spacing: 2) {
+                icon("doc.badge.plus", "新規") { model.newFile() }
+                    .keyboardShortcut("n", modifiers: .command)
+                icon("folder", "開く") { model.openFiles() }
+                    .keyboardShortcut("o", modifiers: .command)
+                icon("square.and.arrow.down", "保存") { model.saveCurrent() }
+                    .keyboardShortcut("s", modifiers: .command)
+                icon("square.and.arrow.up", "別名で保存") { model.saveCurrent(asNew: true) }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                Spacer()
+                icon("sidebar.right", "実行画面") { runner.showPanel.toggle() }
+                icon("gearshape", "設定") {
+                    model.editor.hideCompletions()
+                    model.editor.endEditing()
+                    showSettings = true
+                }
+                Button { model.runOrStop() } label: {
+                    Image(systemName: runner.running ? "stop.fill" : "play.fill")
+                        .font(.title2)
+                        .foregroundColor(model.settings.color(runner.running ? "self" : "string"))
+                        .frame(width: 48, height: 44)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .accessibilityLabel(runner.running ? "停止" : "実行")
+                .disabled(!runner.ready || (!runner.running && !isPython))
+                .opacity(!runner.ready || (!runner.running && !isPython) ? 0.35 : 1)
+            }
+            .padding(.horizontal, 8)
+        }
     }
 
-    // 入力の画面(Pythonの input() 用)
-    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
-                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping (String?) -> Void) {
-        let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
-        alert.addTextField { $0.text = defaultText }
-        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in completionHandler(nil) })
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            completionHandler(alert.textFields?.first?.text)
+    private var statusText: String {
+        if runner.failed { return "読み込みに失敗しました" }
+        if !runner.ready { return "準備中…" }
+        if runner.running { return "実行中" }
+        return model.current.isPython ? "準備OK" : "実行できるのは .py だけです"
+    }
+
+    private func icon(_ name: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name).font(.title3).frame(width: 42, height: 44)
+        }
+        .accessibilityLabel(label)
+    }
+
+    private var console: some View {
+        VStack(spacing: 0) {
+            model.settings.color("fg").opacity(0.18).frame(height: 1)
+            ScrollViewReader { scroll in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(runner.output)
+                            .font(.system(size: 14, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Color.clear.frame(height: 1).id("end")
+                    }
+                    .padding(10)
+                }
+                .onChange(of: runner.output) { _ in scroll.scrollTo("end", anchor: .bottom) }
+            }
+        }
+    }
+}
+
+struct TabBar: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ScrollViewReader { scroll in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(model.tabs) { tab in
+                        item(tab).id(tab.key)
+                    }
+                }
+            }
+            .background(Color.black.opacity(0.1))
+            .onChange(of: model.activeKey) { key in scroll.scrollTo(key) }
+        }
+    }
+
+    private func item(_ tab: EditorTab) -> some View {
+        let active = tab.key == model.activeKey
+        let settings = model.settings
+        return HStack(spacing: 0) {
+            Button { model.select(tab.key) } label: {
+                Text((tab.isDirty ? "● " : "") + tab.name)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .padding(.leading, 14)
+                    .frame(maxWidth: 220, maxHeight: .infinity)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            Button { model.close(tab.key) } label: {
+                Image(systemName: "xmark").font(.caption).frame(width: 36, height: 44)
+            }
+            .accessibilityLabel(tab.name + "を閉じる")
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(settings.color(active ? "fg" : "comment"))
+        .background(active ? settings.color("bg") : Color.clear)
+        .overlay(alignment: .top) {
+            if active { settings.color("func").frame(height: 2) }
+        }
+        .overlay(alignment: .trailing) { settings.color("fg").opacity(0.18).frame(width: 1) }
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                colorSection
+                Section("保存") {
+                    Toggle("実行するときに元のファイルへ保存する", isOn: $model.settings.saveOnRun)
+                    Toggle("入力中も元のファイルへ自動で保存する", isOn: $model.settings.autofile)
+                }
+                Section("エディタ") {
+                    Picker("文字の大きさ", selection: $model.settings.size) {
+                        ForEach([12, 14, 16, 18, 20, 22, 24], id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    Toggle("かっこ・引用符を自動で閉じる", isOn: $model.settings.pair)
+                }
+                Section("入力補完") {
+                    Toggle("入力補完を使う", isOn: $model.settings.complete)
+                    Picker("何文字目から候補を出すか", selection: $model.settings.min) {
+                        ForEach([1, 2, 3, 4, 5], id: \.self) { Text("\($0)文字目").tag($0) }
+                    }
+                    Toggle("「.」の直後にも候補を出す", isOn: $model.settings.dot)
+                }
+            }
+            .navigationTitle("設定")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完了") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var colorSection: some View {
+        Section("色") {
+            Picker("テーマ", selection: themeBinding) {
+                ForEach(Theme.names, id: \.self) { Text($0).tag($0) }
+            }
+            ForEach(Theme.editable) { entry in
+                ColorPicker(entry.label, selection: colorBinding(entry.id), supportsOpacity: false)
+            }
+            Button("色をテーマの初期値に戻す") { model.settings.colors = [:] }
+        }
+    }
+
+    private var themeBinding: Binding<String> {
+        Binding(get: { model.settings.theme }, set: { name in
+            var next = model.settings
+            next.theme = name
+            next.colors = [:]
+            model.settings = next
         })
-        present(alert, animated: true)
-    }
-}
-
-// 元のファイルを直接読み書きする
-@MainActor
-final class FileBridge: NSObject, WKScriptMessageHandlerWithReply, UIDocumentPickerDelegate {
-    weak var presenter: UIViewController?
-    private var waiting: CheckedContinuation<[URL], Never>?
-
-    func userContentController(_ userContentController: WKUserContentController,
-                               didReceive message: WKScriptMessage) async -> (Any?, String?) {
-        guard let body = message.body as? [String: Any],
-              let action = body["action"] as? String else { return (nil, "不明な命令です") }
-        let id = body["id"] as? String ?? ""
-        do {
-            switch action {
-            case "open":
-                let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
-                picker.allowsMultipleSelection = true
-                var result: [[String: Any]] = []
-                for url in await pick(picker) {
-                    do {
-                        let text = try withAccess(url) { try read(url) }
-                        result.append(["id": try remember(url), "name": url.lastPathComponent, "text": text])
-                    } catch {
-                        result.append(["name": url.lastPathComponent, "error": error.localizedDescription])
-                    }
-                }
-                return (result, nil)
-            case "saveAs":
-                guard let name = body["name"] as? String, let text = body["text"] as? String else {
-                    return (nil, "保存する内容がありません")
-                }
-                let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let temp = folder.appendingPathComponent(name)
-                try Data(text.utf8).write(to: temp)
-                // コピーではなく移動して、移動先をそのまま編集する
-                let picker = UIDocumentPickerViewController(forExporting: [temp], asCopy: false)
-                guard let url = await pick(picker).first else { return (["cancel": true], nil) }
-                let newID = try remember(url)
-                return (["id": newID, "name": url.lastPathComponent], nil)
-            case "read":
-                let url = try find(id)
-                let text = try withAccess(url) { try read(url) }
-                return (["id": id, "name": url.lastPathComponent, "text": text], nil)
-            case "write":
-                guard let text = body["text"] as? String else { return (nil, "保存する内容がありません") }
-                let url = try find(id)
-                let force = body["force"] as? Bool ?? false
-                let expected = body["expected"] as? String ?? ""
-                let conflict = try withAccess(url) { () throws -> Bool in
-                    // 別の場所で変えられていたら、勝手に上書きしない
-                    if !force {
-                        let now = try read(url)
-                        if now != expected { return true }
-                    }
-                    try write(text, to: url)
-                    return false
-                }
-                if conflict { return (["conflict": true], nil) }
-                return (["name": url.lastPathComponent], nil)
-            case "close":
-                var all = bookmarks
-                all[id] = nil
-                bookmarks = all
-                return (["ok": true], nil)
-            default:
-                return (nil, "不明な命令です")
-            }
-        } catch {
-            return (nil, error.localizedDescription)
-        }
     }
 
-    private func pick(_ picker: UIDocumentPickerViewController) async -> [URL] {
-        guard waiting == nil, let presenter, presenter.presentedViewController == nil else { return [] }
-        return await withCheckedContinuation { continuation in
-            waiting = continuation
-            picker.delegate = self
-            presenter.present(picker, animated: true)
-        }
-    }
-
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        waiting?.resume(returning: urls)
-        waiting = nil
-    }
-
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        waiting?.resume(returning: [])
-        waiting = nil
-    }
-
-    // 選んだファイルを使う許可を得てから、作業する
-    private func withAccess<T>(_ url: URL, _ work: () throws -> T) rethrows -> T {
-        let allowed = url.startAccessingSecurityScopedResource()
-        defer { if allowed { url.stopAccessingSecurityScopedResource() } }
-        return try work()
-    }
-
-    private func read(_ url: URL) throws -> String {
-        var coordinationError: NSError?
-        var result: Result<String, Error> = .failure(CocoaError(.fileReadUnknown))
-        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { target in
-            result = Result {
-                let data = try Data(contentsOf: target)
-                // 大きすぎるファイルや、文字ではないファイルは開かない
-                if data.count > 1_000_000 { throw CocoaError(.fileReadTooLarge) }
-                if data.contains(0) { throw CocoaError(.fileReadCorruptFile) }
-                guard let text = String(data: data, encoding: .utf8) else {
-                    throw CocoaError(.fileReadInapplicableStringEncoding)
-                }
-                return text
-            }
-        }
-        if let coordinationError { throw coordinationError }
-        return try result.get()
-    }
-
-    private func write(_ text: String, to url: URL) throws {
-        var coordinationError: NSError?
-        var result: Result<Void, Error> = .failure(CocoaError(.fileWriteUnknown))
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { target in
-            result = Result { try Data(text.utf8).write(to: target) }
-        }
-        if let coordinationError { throw coordinationError }
-        try result.get()
-    }
-
-    // アプリを開き直しても同じファイルを使えるように、場所の情報を覚える
-    private var bookmarks: [String: Data] {
-        get { UserDefaults.standard.dictionary(forKey: "bookmarks") as? [String: Data] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: "bookmarks") }
-    }
-
-    private func remember(_ url: URL) throws -> String {
-        var all = bookmarks
-        let old = all.keys.first { key in
-            (try? find(key))?.standardizedFileURL.path == url.standardizedFileURL.path
-        }
-        let id = old ?? UUID().uuidString
-        all = bookmarks
-        all[id] = try withAccess(url) { try url.bookmarkData() }
-        bookmarks = all
-        return id
-    }
-
-    private func find(_ id: String) throws -> URL {
-        guard let data = bookmarks[id] else { throw CocoaError(.fileNoSuchFile) }
-        var stale = false
-        let url = try URL(resolvingBookmarkData: data, bookmarkDataIsStale: &stale)
-        if stale, let fresh = try? withAccess(url, { try url.bookmarkData() }) {
-            var all = bookmarks
-            all[id] = fresh
-            bookmarks = all
-        }
-        return url
+    private func colorBinding(_ key: String) -> Binding<Color> {
+        Binding(get: { model.settings.color(key) },
+                set: { model.settings.colors[key] = UIColor($0).hexString })
     }
 }

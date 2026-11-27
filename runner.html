@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+body { display: flex; justify-content: center; align-items: center; }
+#canvas { width: var(--gw, 400px) !important; height: var(--gh, 300px) !important; flex: none; touch-action: none; outline: 0; background: #000; visibility: hidden; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0" width="400" height="300"></canvas>
+
+<script type="text/plain" id="runner">
+import ast, asyncio, inspect, os, time, traceback
+
+os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"
+_stop = False
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+
+class _Stop(BaseException):
+    pass
+
+_next = 0.0  # 次のコマを始めてよい時刻
+
+class _Clock:
+    # もとのClockは待つ間に画面を止めることがあるので、置きかえる
+    def __init__(self):
+        self._last = time.perf_counter()
+        self._times = []
+        self._ms = 0
+
+    def tick(self, framerate=0):
+        global _next
+        now = time.perf_counter()
+        self._ms = int((now - self._last) * 1000)
+        self._last = now
+        self._times = (self._times + [self._ms])[-10:]
+        if framerate > 0:
+            _next = now + 1 / framerate
+        return self._ms
+
+    tick_busy_loop = tick
+
+    def get_time(self):
+        return self._ms
+
+    get_rawtime = get_time
+
+    def get_fps(self):
+        total = sum(self._times)
+        return 1000 * len(self._times) / total if total else 0.0
+
+def _install(pygame):
+    if getattr(pygame, "_editor_ready", False):
+        return
+    original = pygame.display.set_mode
+
+    def set_mode(size=(0, 0), flags=0, *args, **kwargs):
+        import js
+        w, h = (int(size[0]), int(size[1])) if size else (0, 0)
+        full = bool(flags & pygame.FULLSCREEN)
+        if w == 0 or h == 0:
+            w, h = int(js.window.appWidth()), int(js.window.appHeight())
+            full = True
+        message = js.prepareScreen(w, h, full)
+        if message:
+            raise pygame.error(message)
+        flags &= ~(pygame.FULLSCREEN | pygame.SCALED)
+        return original((w, h), flags, *args, **kwargs)
+
+    pygame.display.set_mode = set_mode
+    pygame.time.Clock = _Clock
+    pygame._editor_ready = True
+
+async def __frame():
+    # 画面の更新とタッチの処理をする時間をブラウザに渡す
+    await asyncio.sleep(max(_next - time.perf_counter(), 0.004))
+    if _stop:
+        raise _Stop
+
+class _AddFrame(ast.NodeTransformer):
+    def visit_FunctionDef(self, node):
+        return node  # 普通の関数の中は変えない
+
+    def visit_ClassDef(self, node):
+        return node
+
+    def visit_Lambda(self, node):
+        return node
+
+    def visit_While(self, node):
+        self.generic_visit(node)
+        wait = ast.parse("await __frame()").body[0]
+        node.body.insert(0, ast.copy_location(wait, node))
+        return node
+
+    def visit_Expr(self, node):
+        # asyncio.run(main()) は await main() に置きかえる
+        v = node.value
+        if (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
+                and v.func.attr == "run" and isinstance(v.func.value, ast.Name)
+                and v.func.value.id == "asyncio" and len(v.args) == 1):
+            node.value = ast.copy_location(ast.Await(v.args[0]), v)
+        return node
+
+def _prepare(source):
+    tree = _AddFrame().visit(ast.parse(source, "main.py"))
+    ast.fix_missing_locations(tree)
+    return compile(tree, "main.py", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+
+async def run_user(source):
+    global _stop, _next
+    _stop = False
+    _next = 0.0
+    try:
+        try:
+            import pygame
+            _install(pygame)
+        except ImportError:
+            pass
+        env = {"__name__": "__main__", "__frame": __frame}
+        result = eval(_prepare(source), env)
+        if inspect.isawaitable(result):
+            await result
+        print("--- 終了しました ---")
+    except _Stop:
+        print("--- 停止しました ---")
+    except SystemExit:
+        print("--- 終了しました ---")
+    except BaseException:
+        print(traceback.format_exc())
+    finally:
+        try:
+            import pygame
+            pygame.quit()
+        except ImportError:
+            pass
+
+def stop_user():
+    global _stop
+    _stop = True
+</script>
+
+<script type="text/plain" id="completer">
+import builtins, importlib, keyword, json, re
+
+_MODULES = {"pygame", "math", "random", "time", "sys", "os", "asyncio", "json",
+            "datetime", "collections", "itertools", "re", "string", "copy"}
+
+def complete(source, base, prefix):
+    found = {}
+    if base:
+        # 「pygame.draw.」のような、ドットの後ろの候補
+        aliases = {}
+        for m in re.finditer(r"^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?", source, re.M):
+            name, alias = m.group(1), m.group(2)
+            if alias:
+                aliases[alias] = name
+            else:
+                top = name.split(".")[0]
+                aliases[top] = top
+        first, *rest = base.split(".")
+        target = aliases.get(first)
+        if target and target.split(".")[0] in _MODULES:
+            try:
+                obj = importlib.import_module(target)
+                for part in rest:
+                    obj = getattr(obj, part)
+                for n in dir(obj):
+                    if not n.startswith("_"):
+                        value = getattr(obj, n, None)
+                        found[n] = "関数" if callable(value) else "属性"
+            except Exception:
+                pass
+    else:
+        for n in keyword.kwlist:
+            found[n] = "キーワード"
+        for n in dir(builtins):
+            if not n.startswith("_"):
+                found[n] = "組み込み"
+        for n in re.findall(r"\b[^\W\d]\w*", source):
+            if n != prefix:
+                found.setdefault(n, "このコード内")
+    low = prefix.lower()
+    names = [n for n in found if n.lower().startswith(low) and n != prefix]
+    order = {"このコード内": 0, "組み込み": 1, "キーワード": 1}
+    common = ["print", "range", "import", "if", "for", "while", "def"]
+    names.sort(key=lambda n: (not n.startswith(prefix), order.get(found[n], 1),
+                              common.index(n) if n in common else 99, len(n), n))
+    return json.dumps([[n, found[n]] for n in names[:30]], ensure_ascii=False)
+</script>
+
+<script src="pyodide/pyodide.js"></script>
+<script>
+// このページはPythonの実行とゲーム画面だけを受け持つ。ほかの画面はSwiftUI
+const $ = id => document.getElementById(id);
+const send = (type, value) => window.webkit.messageHandlers.runner.postMessage({ type, value: value ?? "" });
+
+// 出力はまとめて送る(1行ずつ送ると重くなるため)
+let waiting = "", timer = 0;
+function flush() {
+  clearTimeout(timer);
+  timer = 0;
+  if (waiting) send("out", waiting);
+  waiting = "";
+}
+function log(text) {
+  waiting = (waiting + text + "\n").slice(-20000);
+  if (!timer) timer = setTimeout(flush, 50);
+}
+
+// ---- ゲーム画面の大きさ ----
+let layout = { panelW: 400, panelH: 400, appW: 1180, appH: 776 };
+let game = { w: 400, h: 300 }, full = false;
+window.setLayout = (panelW, panelH, appW, appH) => { layout = { panelW, panelH, appW, appH }; fitCanvas(); };
+window.appWidth = () => layout.appW;
+window.appHeight = () => layout.appH;
+// 指定の大きさで表示する。画面からはみ出すときだけ、比率を保って縮める
+function fitCanvas() {
+  const margin = full ? 0 : 16;
+  if (window.innerWidth <= margin || window.innerHeight <= margin) return;
+  const scale = Math.min(1, (window.innerWidth - margin) / game.w, (window.innerHeight - margin) / game.h);
+  document.documentElement.style.setProperty("--gw", game.w * scale + "px");
+  document.documentElement.style.setProperty("--gh", game.h * scale + "px");
+}
+window.addEventListener("resize", fitCanvas);
+new ResizeObserver(fitCanvas).observe(document.body);
+// Pythonの set_mode から呼ばれる。問題があれば説明の文を返す
+window.prepareScreen = (w, h, forceFull) => {
+  const ratio = window.devicePixelRatio || 1;
+  const long = Math.round(Math.max(screen.width, screen.height) * ratio);
+  const short = Math.round(Math.min(screen.width, screen.height) * ratio);
+  const wide = layout.appW >= layout.appH;
+  const maxW = wide ? long : short, maxH = wide ? short : long;
+  if (w > maxW || h > maxH)
+    return `画面サイズ ${w}×${h} は大きすぎます。今の向きでは ${maxW}×${maxH} までにしてください。`;
+  game = { w, h };
+  full = forceFull || w > layout.panelW - 16 || h > layout.panelH - 16;
+  $("canvas").style.visibility = "visible";
+  send("screen", full ? "full" : "panel");
+  fitCanvas();
+  return "";
+};
+
+async function start() {
+  try {
+    const py = await loadPyodide({ indexURL: new URL("pyodide/", location.href).href });
+    py.setStdout({ batched: log });
+    py.setStderr({ batched: log });
+    py._api._skip_unwind_fatal_error = true;
+    py.canvas.setCanvas2D($("canvas"));
+    await py.loadPackage("pygame-ce", { messageCallback: () => {} });
+    py.runPython($("runner").textContent);
+    const runUser = py.globals.get("run_user");
+    const stopUser = py.globals.get("stop_user");
+    // 入力補完は、実行するコードとは別の場所に読み込む
+    const space = py.globals.get("dict")();
+    py.runPython($("completer").textContent, { globals: space });
+    const complete = space.get("complete");
+    window.completeCode = (source, base, prefix) => complete(source, base, prefix);
+    window.stopCode = () => stopUser();
+    window.runCode = async source => {
+      $("canvas").focus();
+      try {
+        await py.loadPackagesFromImports(source, { messageCallback: () => {} }).catch(() => {});
+        await runUser(source);
+      } catch (e) {
+        log(String(e));
+      } finally {
+        flush();
+        full = false;
+        fitCanvas();
+        send("done");
+      }
+    };
+    $("canvas").addEventListener("pointerdown", () => $("canvas").focus());
+    flush();
+    send("ready");
+  } catch (e) {
+    log(String(e));
+    flush();
+    send("failed");
+  }
+}
+send("loaded");
+start();
+</script>
+</body>
+</html>
