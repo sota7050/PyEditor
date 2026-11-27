@@ -62,7 +62,9 @@ dialog .head { position: sticky; top: 0; display: flex; justify-content: space-b
 dialog h2 { font-size: 13px; color: var(--comment); margin: 16px 16px 4px; }
 dialog label { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 44px; padding: 0 16px; }
 dialog select, dialog .btn { font-size: 16px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
-dialog input[type=color] { width: 52px; height: 32px; border: 0; padding: 0; background: none; }
+dialog input[type=color] { flex: none; width: 32px; height: 32px; min-width: 32px; aspect-ratio: 1; border: 0; border-radius: 50%; padding: 0; background: none; overflow: hidden; }
+dialog input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+dialog input[type=color]::-webkit-color-swatch { border: 1px solid var(--line); border-radius: 50%; }
 dialog input[type=checkbox] { width: 22px; height: 22px; }
 #reset { margin: 8px 16px 16px; }
 </style>
@@ -103,7 +105,8 @@ dialog input[type=checkbox] { width: 22px; height: 22px; }
   <button id="reset" class="btn">色をテーマの初期値に戻す</button>
   <h2>エディタ</h2>
   <label>文字の大きさ<select id="size"></select></label>
-  <label>元のファイルへ自動で保存する<input type="checkbox" id="autofile"></label>
+  <label>入力中も元のファイルへ自動で保存する<input type="checkbox" id="autofile"></label>
+  <label>実行するときに元のファイルへ保存する<input type="checkbox" id="saveOnRun"></label>
   <label>かっこ・引用符を自動で閉じる<input type="checkbox" id="pair"></label>
   <h2>入力補完</h2>
   <label>入力補完を使う<input type="checkbox" id="complete"></label>
@@ -329,7 +332,7 @@ const THEMES = {
   "Monokai風": { bg: "#272822", fg: "#f8f8f2", keyword: "#f92672", string: "#e6db74", number: "#ae81ff", func: "#a6e22e", builtin: "#66d9ef", comment: "#8f8a73", type: "#66d9ef", self: "#fd971f" },
   "ブラック": { bg: "#000000", fg: "#d4d4d4", keyword: "#c586c0", string: "#ce9178", number: "#b5cea8", func: "#4fc1ff", builtin: "#4ec9b0", comment: "#6a9955", type: "#dcdcaa", self: "#f44747" }
 };
-const DEFAULTS = { theme: "One Dark Pro Flat", colors: {}, size: 16, autofile: false, pair: true, complete: true, min: 1, dot: true };
+const DEFAULTS = { theme: "One Dark Pro Flat", colors: {}, size: 16, autofile: false, saveOnRun: true, pair: true, complete: true, min: 1, dot: true };
 let config = { ...DEFAULTS };
 try { config = { ...DEFAULTS, ...JSON.parse(window.nativeSettings || "{}") }; } catch (e) {}
 if (!THEMES[config.theme]) config.theme = DEFAULTS.theme;
@@ -361,7 +364,7 @@ function fillForm() {
   $("theme").value = config.theme;
   for (const k in COLOR_NAMES) $("color-" + k).value = palette()[k];
   for (const k of ["size", "min"]) $(k).value = config[k];
-  for (const k of ["autofile", "pair", "complete", "dot"]) $(k).checked = config[k];
+  for (const k of ["autofile", "saveOnRun", "pair", "complete", "dot"]) $(k).checked = config[k];
 }
 function setupForm() {
   for (const name in THEMES) $("theme").add(new Option(name));
@@ -377,7 +380,7 @@ function setupForm() {
   $("theme").onchange = () => { config.theme = $("theme").value; config.colors = {}; saveSettings(); fillForm(); };
   $("reset").onclick = () => { config.colors = {}; saveSettings(); fillForm(); };
   for (const k of ["size", "min"]) $(k).onchange = () => { config[k] = Number($(k).value); saveSettings(); render(); };
-  for (const k of ["autofile", "pair", "complete", "dot"]) $(k).onchange = () => { config[k] = $(k).checked; saveSettings(); };
+  for (const k of ["autofile", "saveOnRun", "pair", "complete", "dot"]) $(k).onchange = () => { config[k] = $(k).checked; saveSettings(); };
   $("gear").onclick = () => { hidePopup(); code.blur(); fillForm(); $("settings").showModal(); };
   $("close").onclick = () => $("settings").close();
 }
@@ -705,7 +708,8 @@ async function refresh() {
   }
 }
 async function save(tab, { as = false, auto = false } = {}) {
-  if (tab.saving) { if (auto) schedule(tab); return; }
+  // 保存の途中なら、終わってからもう一度保存する
+  if (tab.saving) { if (auto) tab.again = true; return; }
   tab.saving = true;
   clearTimeout(tab.timer);
   const text = tab.text;
@@ -738,7 +742,10 @@ async function save(tab, { as = false, auto = false } = {}) {
   } finally {
     tab.saving = false;
     renderTabs(); updateRun(); persist();
-    if (tab.text !== text) schedule(tab);
+    const again = tab.again;
+    tab.again = false;
+    if (again && !tab.paused && tabs.includes(tab) && isDirty(tab)) save(tab, { auto: true });
+    else if (tab.text !== text) schedule(tab);
   }
   if (retryAs) return save(tab, { as: true });
 }
@@ -758,7 +765,7 @@ function restore() {
   let data = null;
   try { data = JSON.parse(window.nativeWorkspace); } catch (e) {}
   if (data?.tabs?.length) {
-    tabs = data.tabs.map(t => ({ ...t, saving: false, paused: false, timer: 0 }));
+    tabs = data.tabs.map(t => ({ ...t, saving: false, again: false, paused: false, timer: 0 }));
     show(tabs.find(t => t.key === data.active) || tabs[0]);
   } else {
     // 前の版で自動保存されたコードを引きつぐ
@@ -806,7 +813,9 @@ async function start() {
     $("run").onclick = async () => {
       if (running) return stopUser();
       if (!isPy(current.name)) return;
-      const source = current.text;
+      const tab = current, source = tab.text;
+      // 元のファイルがあるタブだけ保存する(新しいファイルは保存場所が未定)
+      if (config.saveOnRun && tab.fileId && isDirty(tab)) save(tab, { auto: true });
       setRunning(true);
       out.textContent = "";
       code.blur();
