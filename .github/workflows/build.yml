@@ -16,7 +16,7 @@ jobs:
           tar xjf core.tar.bz2
           APP=Payload/PyEditor.app
           mkdir -p "$APP/www/pyodide"
-          cp index.html "$APP/www/"
+          cp runner.html "$APP/www/"
           for f in pyodide.js pyodide.asm.mjs pyodide.asm.wasm python_stdlib.zip pyodide-lock.json; do
             cp "pyodide/$f" "$APP/www/pyodide/"
           done
@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           APP=Payload/PyEditor.app
           cp Info.plist "$APP/"
-          xcrun -sdk iphoneos swiftc -target arm64-apple-ios16.4 -parse-as-library -swift-version 5 -O App.swift -o "$APP/PyEditor"
+          xcrun -sdk iphoneos swiftc -target arm64-apple-ios16.4 -parse-as-library -swift-version 5 -O *.swift -o "$APP/PyEditor"
           plutil -lint "$APP/Info.plist"
           codesign --force --sign - "$APP"
           zip -qry PyEditor.ipa Payload
