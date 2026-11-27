@@ -9,7 +9,7 @@
 html, body { margin: 0; height: 100%; overflow: hidden; }
 body { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font-family: -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }
 header { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--line); }
-header .title { flex: 1; text-align: center; min-width: 0; }
+header .title { white-space: nowrap; overflow: hidden; flex: 1; text-align: center; min-width: 0; }
 #name { font-weight: 600; color: var(--fg); }
 #status { font-size: 12px; color: var(--comment); }
 header button { width: 44px; height: 44px; border: 0; background: none; color: var(--func); display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; }
@@ -40,13 +40,21 @@ main { flex: 1; display: flex; min-height: 0; }
 #panel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); }
 #panel[hidden], #popup[hidden] { display: none; }
 #screen { flex: 2; overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 8px; min-height: 0; }
-#canvas { width: auto !important; height: auto !important; max-width: 100%; max-height: 100%; background: #000; touch-action: none; outline: 0; }
+#canvas { width: var(--gw, 400px) !important; height: var(--gh, 300px) !important; flex: none; background: #000; touch-action: none; outline: 0; }
 #out { flex: 1; overflow: auto; margin: 0; padding: 10px; border-top: 1px solid var(--line); white-space: pre-wrap; font: 14px/1.5 Menlo, ui-monospace, monospace; }
 @media (orientation: portrait) { main { flex-direction: column; } #panel { border-left: 0; border-top: 1px solid var(--line); } }
 /* 全画面表示 */
-body.full #screen { position: fixed; inset: 0; z-index: 20; padding: 0; background: #000; }
+body.full #screen { position: fixed; inset: 0; z-index: 20; padding: 0; background: rgba(0,0,0,.6); }
+body.full #canvas { box-shadow: 0 8px 32px rgba(0,0,0,.6); }
 #exit { position: fixed; z-index: 21; top: 8px; right: 8px; width: 48px; height: 48px; border: 0; border-radius: 24px; background: rgba(40,44,52,.75); color: #e06c75; font-size: 22px; display: none; }
 body.full #exit { display: block; }
+/* タブ */
+#tabs { display: flex; flex: none; overflow-x: auto; background: color-mix(in srgb, #000 12%, var(--bg)); border-bottom: 1px solid var(--line); }
+.tab { display: flex; align-items: center; flex: none; max-width: 260px; border-right: 1px solid var(--line); color: var(--comment); }
+.tab.on { background: var(--bg); color: var(--fg); box-shadow: inset 0 2px var(--func); }
+.tab button { border: 0; background: none; color: inherit; font: 14px -apple-system, sans-serif; height: 36px; }
+.tab .label { padding: 0 4px 0 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.tab .x { width: 36px; font-size: 17px; padding: 0; }
 /* 設定画面 */
 dialog { width: min(480px, 94vw); max-height: 90%; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--fg); overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,.45); }
@@ -61,14 +69,16 @@ dialog input[type=checkbox] { width: 22px; height: 22px; }
 </head>
 <body>
 <header>
+  <button id="new" aria-label="新しいファイル"><svg viewBox="0 0 24 24"><path d="M14 3H6v18h12V7zM14 3v4h4M12 11v6M9 14h6"/></svg></button>
   <button id="open" aria-label="開く"><svg viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/></svg></button>
-  <button id="save" aria-label="ファイルに保存"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 12v8h14v-8"/></svg></button>
+  <button id="save" aria-label="保存"><svg viewBox="0 0 24 24"><path d="M5 4h12l3 3v13H4V4zM8 4v5h7V4M8 20v-6h8v6"/></svg></button>
+  <button id="saveas" aria-label="別名で保存"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 12v8h14v-8"/></svg></button>
   <div class="title"><div id="name">main.py</div><div id="status">準備中…</div></div>
   <button id="toggle" aria-label="実行画面の表示を切りかえる"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg></button>
   <button id="gear" aria-label="設定"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button>
   <button id="run" aria-label="実行" disabled><svg class="play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg><svg class="stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
-  <input id="file" type="file" accept=".py,text/plain" hidden>
 </header>
+<nav id="tabs"></nav>
 <main>
   <div id="editor">
     <div id="gutter"><pre id="nums"></pre></div>
@@ -93,6 +103,7 @@ dialog input[type=checkbox] { width: 22px; height: 22px; }
   <button id="reset" class="btn">色をテーマの初期値に戻す</button>
   <h2>エディタ</h2>
   <label>文字の大きさ<select id="size"></select></label>
+  <label>元のファイルへ自動で保存する<input type="checkbox" id="autofile"></label>
   <label>かっこ・引用符を自動で閉じる<input type="checkbox" id="pair"></label>
   <h2>入力補完</h2>
   <label>入力補完を使う<input type="checkbox" id="complete"></label>
@@ -309,8 +320,6 @@ const log = text => { out.textContent = (out.textContent + text + "\n").slice(-2
 
 // アプリ側(Swift)とのやりとり
 const native = window.webkit?.messageHandlers;
-code.value = window.nativeCode ?? $("sample").textContent;
-const autosave = () => native?.autosave.postMessage(code.value);
 
 // ---- 設定 ----
 const COLOR_NAMES = { bg: "背景", fg: "ふつうの文字", keyword: "キーワード（if など）", string: "文字列", number: "数字", func: "関数・ボタン", builtin: "組み込み・記号", comment: "コメント" };
@@ -320,7 +329,7 @@ const THEMES = {
   "Monokai風": { bg: "#272822", fg: "#f8f8f2", keyword: "#f92672", string: "#e6db74", number: "#ae81ff", func: "#a6e22e", builtin: "#66d9ef", comment: "#8f8a73", type: "#66d9ef", self: "#fd971f" },
   "ブラック": { bg: "#000000", fg: "#d4d4d4", keyword: "#c586c0", string: "#ce9178", number: "#b5cea8", func: "#4fc1ff", builtin: "#4ec9b0", comment: "#6a9955", type: "#dcdcaa", self: "#f44747" }
 };
-const DEFAULTS = { theme: "One Dark Pro Flat", colors: {}, size: 16, pair: true, complete: true, min: 1, dot: true };
+const DEFAULTS = { theme: "One Dark Pro Flat", colors: {}, size: 16, autofile: false, pair: true, complete: true, min: 1, dot: true };
 let config = { ...DEFAULTS };
 try { config = { ...DEFAULTS, ...JSON.parse(window.nativeSettings || "{}") }; } catch (e) {}
 if (!THEMES[config.theme]) config.theme = DEFAULTS.theme;
@@ -336,14 +345,23 @@ function applySettings() {
   const dark = (n >> 16) * .299 + ((n >> 8) & 255) * .587 + (n & 255) * .114 < 140;
   root.colorScheme = dark ? "dark" : "light";
   // 上下の余白の色もアプリ側で合わせる
-  native?.appearance?.postMessage(JSON.stringify({ bg: colors.bg, dark }));
+  sendAppearance();
+}
+function sendAppearance() {
+  let bg = palette().bg, n = parseInt(bg.slice(1), 16);
+  let dark = (n >> 16) * .299 + ((n >> 8) & 255) * .587 + (n & 255) * .114 < 140;
+  if (document.body.classList.contains("full")) {
+    bg = "#" + [16, 8, 0].map(s => Math.round(((n >> s) & 255) * .4).toString(16).padStart(2, "0")).join("");
+    dark = true;
+  }
+  native?.appearance?.postMessage(JSON.stringify({ bg, dark }));
 }
 function saveSettings() { applySettings(); native?.settings?.postMessage(JSON.stringify(config)); }
 function fillForm() {
   $("theme").value = config.theme;
   for (const k in COLOR_NAMES) $("color-" + k).value = palette()[k];
   for (const k of ["size", "min"]) $(k).value = config[k];
-  for (const k of ["pair", "complete", "dot"]) $(k).checked = config[k];
+  for (const k of ["autofile", "pair", "complete", "dot"]) $(k).checked = config[k];
 }
 function setupForm() {
   for (const name in THEMES) $("theme").add(new Option(name));
@@ -359,7 +377,7 @@ function setupForm() {
   $("theme").onchange = () => { config.theme = $("theme").value; config.colors = {}; saveSettings(); fillForm(); };
   $("reset").onclick = () => { config.colors = {}; saveSettings(); fillForm(); };
   for (const k of ["size", "min"]) $(k).onchange = () => { config[k] = Number($(k).value); saveSettings(); render(); };
-  for (const k of ["pair", "complete", "dot"]) $(k).onchange = () => { config[k] = $(k).checked; saveSettings(); };
+  for (const k of ["autofile", "pair", "complete", "dot"]) $(k).onchange = () => { config[k] = $(k).checked; saveSettings(); };
   $("gear").onclick = () => { hidePopup(); code.blur(); fillForm(); $("settings").showModal(); };
   $("close").onclick = () => $("settings").close();
 }
@@ -396,7 +414,7 @@ function syncScroll() {
   $("nums").style.transform = `translateY(${-code.scrollTop}px)`;
 }
 function render() {
-  $("hl").innerHTML = highlight(code.value) + "\n ";
+  $("hl").innerHTML = (current && !isPy(current.name) ? esc(code.value) : highlight(code.value)) + "\n ";
   $("nums").textContent = code.value.split("\n").map((_, i) => i + 1).join("\n");
   syncScroll();
 }
@@ -429,7 +447,7 @@ function suggest() {
   const m = before.match(/(?:([\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*)\.)?([\p{L}_][\p{L}\p{N}_]*)?$/u);
   const base = m[1] || "", prefix = m[2] || "";
   const enough = base && !prefix ? config.dot : prefix.length >= config.min;
-  if (!config.complete || !enough || (!base && !prefix) || /\w/.test(code.value[pos] || "") || inStringOrComment(before)) return hidePopup();
+  if (!isPy(current.name) || !config.complete || !enough || (!base && !prefix) || /\w/.test(code.value[pos] || "") || inStringOrComment(before)) return hidePopup();
   if (!base && before[before.length - prefix.length - 1] === ".") return hidePopup();
   items = JSON.parse(pyComplete(code.value, base, prefix));
   if (!items.length) return hidePopup();
@@ -472,7 +490,7 @@ function accept(i) {
   hidePopup();
 }
 
-code.addEventListener("input", e => { render(); autosave(); if (e.inputType?.startsWith("delete") || e.inputType === "insertText") suggest(); else hidePopup(); });
+code.addEventListener("input", e => { render(); edited(); if (e.inputType?.startsWith("delete") || e.inputType === "insertText") suggest(); else hidePopup(); });
 code.addEventListener("compositionend", () => setTimeout(suggest));
 code.addEventListener("scroll", () => { syncScroll(); hidePopup(); });
 code.addEventListener("click", hidePopup);
@@ -562,37 +580,204 @@ code.addEventListener("keydown", e => {
 });
 
 // ---- ゲーム画面の大きさ ----
+let game = { w: 400, h: 300 };
+// 指定の大きさで表示する。画面からはみ出すときだけ、比率を保って縮める
+function fitCanvas() {
+  const area = $("screen"), margin = document.body.classList.contains("full") ? 0 : 16;
+  if (!area.clientWidth || !area.clientHeight) return;
+  const scale = Math.min(1, (area.clientWidth - margin) / game.w, (area.clientHeight - margin) / game.h);
+  document.documentElement.style.setProperty("--gw", game.w * scale + "px");
+  document.documentElement.style.setProperty("--gh", game.h * scale + "px");
+}
+new ResizeObserver(fitCanvas).observe($("screen"));
+function setFull(on) {
+  document.body.classList.toggle("full", on);
+  fitCanvas();
+  sendAppearance();
+}
 // Pythonの set_mode から呼ばれる。問題があれば説明の文を返す
 window.prepareScreen = (w, h, forceFull) => {
   const ratio = window.devicePixelRatio || 1;
   const long = Math.round(Math.max(screen.width, screen.height) * ratio);
   const short = Math.round(Math.min(screen.width, screen.height) * ratio);
-  const wide = window.innerWidth >= window.innerHeight;
+  const wide = screen.orientation ? screen.orientation.type.startsWith("landscape") : window.innerWidth >= window.innerHeight;
   const maxW = wide ? long : short, maxH = wide ? short : long;
   if (w > maxW || h > maxH)
     return `画面サイズ ${w}×${h} は大きすぎます。今の向きでは ${maxW}×${maxH} までにしてください。`;
-  document.body.classList.remove("full");
+  game = { w, h };
+  setFull(false);
   $("panel").hidden = false;
   const area = $("screen");
-  const full = forceFull || w > area.clientWidth - 16 || h > area.clientHeight - 16;
-  document.body.classList.toggle("full", full);
+  setFull(forceFull || w > area.clientWidth - 16 || h > area.clientHeight - 16);
   return "";
 };
+
+// ---- タブとファイル ----
+const isPy = name => /\.py$/i.test(name);
+const files = message => native.files.postMessage(message);
+const clean = text => text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+// 元のファイルの改行の形に合わせる
+const toDisk = (tab, text) => tab.disk?.includes("\r\n") ? text.replace(/\n/g, "\r\n") : text;
+let tabs = [], current = null, ready = false, running = false;
+const newKey = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const makeTab = (name, text, fileId = null, disk = null) =>
+  ({ key: newKey(), name, text, fileId, disk, saved: disk === null ? "" : clean(disk) });
+const isDirty = tab => tab.text !== tab.saved;
+const persist = () => native?.state.postMessage(JSON.stringify({ tabs, active: current.key }));
+
+function updateRun() {
+  const ok = current && isPy(current.name);
+  $("run").disabled = !ready || (!running && !ok);
+  if (ready) status.textContent = running ? "実行中" : ok ? "準備OK" : "実行できるのは .py ファイルだけです";
+}
+function renderTabs() {
+  $("tabs").replaceChildren(...tabs.map(tab => {
+    const box = document.createElement("div"), label = document.createElement("button"), x = document.createElement("button");
+    box.className = "tab" + (tab === current ? " on" : "");
+    label.className = "label";
+    label.textContent = (isDirty(tab) ? "● " : "") + tab.name;
+    label.onclick = () => select(tab);
+    x.className = "x"; x.textContent = "×";
+    x.setAttribute("aria-label", tab.name + "を閉じる");
+    x.onclick = () => closeTab(tab);
+    box.append(label, x);
+    return box;
+  }));
+  $("name").textContent = current.name;
+}
+function show(tab) {
+  current = tab;
+  hidePopup();
+  code.value = tab.text;
+  code.setSelectionRange(tab.start || 0, tab.end || 0);
+  code.scrollTop = tab.top || 0;
+  code.scrollLeft = tab.left || 0;
+  render(); renderTabs(); updateRun(); persist();
+  $("tabs").querySelector(".on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+function select(tab) {
+  if (tab === current) return;
+  Object.assign(current, { start: code.selectionStart, end: code.selectionEnd, top: code.scrollTop, left: code.scrollLeft });
+  show(tab);
+}
+function add(tab) { tabs.push(tab); current ? select(tab) : show(tab); }
+function newFile() {
+  const name = prompt("新しいファイルの名前（例：game.py）", "untitled.py")?.trim();
+  if (!name) return;
+  if (/[\/:]/.test(name)) return alert("名前に / や : は使えません。");
+  add(makeTab(name, ""));
+}
+function closeTab(tab) {
+  if (isDirty(tab) && !confirm(`「${tab.name}」の変更はファイルに保存されていません。保存せずに閉じますか？`)) return;
+  const i = tabs.indexOf(tab);
+  if (i < 0) return;
+  clearTimeout(tab.timer);
+  tabs.splice(i, 1);
+  if (tab.fileId) files({ action: "close", id: tab.fileId }).catch(() => {});
+  if (!tabs.length) tabs.push(makeTab("untitled.py", ""));
+  if (tab === current) show(tabs[Math.min(i, tabs.length - 1)]);
+  else { renderTabs(); persist(); }
+}
+async function openFiles() {
+  try {
+    for (const f of await files({ action: "open" })) {
+      if (f.error) { alert(`「${f.name}」を開けませんでした。\n${f.error}`); continue; }
+      const old = tabs.find(t => t.fileId === f.id);
+      if (!old) add(makeTab(f.name, clean(f.text), f.id, f.text));
+      else { if (!isDirty(old)) update(old, f); select(old); }
+    }
+  } catch (e) { alert("ファイルを開けませんでした。\n" + e.message); }
+}
+// 元のファイルの内容をタブに反映する
+function update(tab, f) {
+  tab.name = f.name; tab.disk = f.text; tab.text = tab.saved = clean(f.text);
+  if (tab === current && code.value !== tab.text) { hidePopup(); code.value = tab.text; render(); }
+  renderTabs(); updateRun(); persist();
+}
+// ほかのアプリで変えた内容を読み直す(このアプリで未保存のタブは変えない)
+async function refresh() {
+  for (const tab of [...tabs]) {
+    if (!tab.fileId || tab.saving || isDirty(tab)) continue;
+    try {
+      const before = tab.disk, f = await files({ action: "read", id: tab.fileId });
+      if (tabs.includes(tab) && !isDirty(tab) && !tab.saving && tab.disk === before && f.text !== before) update(tab, f);
+    } catch (e) {}
+  }
+}
+async function save(tab, { as = false, auto = false } = {}) {
+  if (tab.saving) { if (auto) schedule(tab); return; }
+  tab.saving = true;
+  clearTimeout(tab.timer);
+  const text = tab.text;
+  let retryAs = false;
+  try {
+    const data = toDisk(tab, text);
+    let result;
+    if (as || !tab.fileId) {
+      result = await files({ action: "saveAs", name: tab.name, text: data });
+      if (result.cancel) return;
+      for (const other of tabs) if (other !== tab && other.fileId === result.id) { other.fileId = null; other.disk = null; other.saved = ""; }
+      if (tab.fileId && tab.fileId !== result.id) files({ action: "close", id: tab.fileId }).catch(() => {});
+      tab.fileId = result.id;
+    } else {
+      const request = { action: "write", id: tab.fileId, text: data, expected: tab.disk };
+      result = await files(request);
+      if (result.conflict) {
+        if (!confirm(`「${tab.name}」は、ほかの場所で変更されています。今の内容で上書きしますか？`)) {
+          tab.paused = true;
+          return;
+        }
+        result = await files({ ...request, force: true });
+      }
+    }
+    tab.name = result.name; tab.disk = data; tab.saved = text; tab.paused = false;
+  } catch (e) {
+    tab.paused = true;
+    retryAs = !as && !!tab.fileId && confirm(`「${tab.name}」を保存できませんでした。\n${e.message}\n別の場所に保存しますか？`);
+    if (!retryAs) alert("保存できませんでした。内容はタブに残っています。\n" + e.message);
+  } finally {
+    tab.saving = false;
+    renderTabs(); updateRun(); persist();
+    if (tab.text !== text) schedule(tab);
+  }
+  if (retryAs) return save(tab, { as: true });
+}
+function schedule(tab) {
+  clearTimeout(tab.timer);
+  if (!config.autofile || !tab.fileId || tab.paused) return;
+  tab.timer = setTimeout(() => { if (config.autofile && tabs.includes(tab) && isDirty(tab) && !tab.paused) save(tab, { auto: true }); }, 1000);
+}
+function edited() {
+  const was = isDirty(current);
+  current.text = code.value;
+  if (was !== isDirty(current)) renderTabs();
+  persist();
+  schedule(current);
+}
+function restore() {
+  let data = null;
+  try { data = JSON.parse(window.nativeWorkspace); } catch (e) {}
+  if (data?.tabs?.length) {
+    tabs = data.tabs.map(t => ({ ...t, saving: false, paused: false, timer: 0 }));
+    show(tabs.find(t => t.key === data.active) || tabs[0]);
+  } else {
+    // 前の版で自動保存されたコードを引きつぐ
+    add(makeTab("main.py", window.nativeCode ?? $("sample").textContent));
+  }
+  refresh();
+}
 
 // ---- ボタン ----
 const showPanel = show => { $("panel").hidden = !show; hidePopup(); };
 $("toggle").onclick = () => showPanel($("panel").hidden);
-$("open").onclick = () => $("file").click();
-$("file").onchange = async e => {
-  const f = e.target.files[0];
-  if (f && confirm("今のプログラムを、選んだファイルに置きかえますか？")) {
-    code.value = await f.text();
-    $("name").textContent = f.name;
-    render(); autosave();
-  }
-  e.target.value = "";
-};
-$("save").onclick = () => native?.exportFile.postMessage(code.value);
+$("new").onclick = newFile;
+$("open").onclick = openFiles;
+$("save").onclick = () => save(current);
+$("saveas").onclick = () => save(current, { as: true });
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(current, { as: e.shiftKey }); }
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
 async function start() {
   try {
@@ -611,24 +796,25 @@ async function start() {
     py.runPython($("completer").textContent, { globals: space });
     pyComplete = space.get("complete");
 
-    let running = false;
     const setRunning = on => {
       running = on;
       $("run").classList.toggle("running", on);
       $("run").setAttribute("aria-label", on ? "停止" : "実行");
-      status.textContent = on ? "実行中" : "準備OK";
-      if (!on) document.body.classList.remove("full");
+      updateRun();
+      if (!on) setFull(false);
     };
     $("run").onclick = async () => {
       if (running) return stopUser();
+      if (!isPy(current.name)) return;
+      const source = current.text;
       setRunning(true);
       out.textContent = "";
       code.blur();
       showPanel(true);
       $("canvas").focus();
       try {
-        await py.loadPackagesFromImports(code.value, { messageCallback: () => {} }).catch(() => {});
-        await runUser(code.value);
+        await py.loadPackagesFromImports(source, { messageCallback: () => {} }).catch(() => {});
+        await runUser(source);
       } catch (e) {
         log(String(e));
       } finally {
@@ -637,8 +823,8 @@ async function start() {
     };
     $("exit").onclick = () => stopUser();
     $("canvas").addEventListener("pointerdown", () => $("canvas").focus());
-    $("run").disabled = false;
-    status.textContent = "準備OK";
+    ready = true;
+    updateRun();
   } catch (e) {
     status.textContent = "読み込みに失敗しました";
     showPanel(true);
@@ -647,7 +833,7 @@ async function start() {
 }
 setupForm();
 applySettings();
-render();
+restore();
 start();
 </script>
 </body>
