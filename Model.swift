@@ -170,6 +170,8 @@ final class AppModel: ObservableObject {
     private var autoTasks: [String: Task<Void, Never>] = [:]
     private var persistTask: Task<Void, Never>?
     private var busyDialog = false
+    private var preparing = false       // 実行の準備中
+    private var project: Project?       // 実行中の作業フォルダー
 
     var current: EditorTab {
         tabs.first { $0.key == activeKey } ?? tabs[0]
@@ -192,6 +194,25 @@ final class AppModel: ObservableObject {
             tabs = [tab]
             activeKey = tab.key
         }
+    }
+
+    func chooseFolder() {
+        Task {
+            do {
+                if let name = try await files.chooseFolder() {
+                    await Dialog.notify("作業フォルダー「\(name)」を登録しました。この中の .py ファイルを開いて実行すると、同じフォルダーのファイルを使えます。")
+                }
+            } catch {
+                await Dialog.notify("フォルダーを登録できませんでした。\n" + error.localizedDescription)
+            }
+        }
+    }
+
+    private func writeBack(_ changes: [[String]]) {
+        guard var value = project else { return }
+        for note in files.writeBack(changes, to: &value) { runner.note(note) }
+        project = value
+        refresh()   // 開いているタブにも反映する
     }
 
     private func index(_ key: String) -> Int? {
@@ -405,14 +426,29 @@ final class AppModel: ObservableObject {
             return
         }
         let tab = current
-        guard runner.ready, tab.isPython else { return }
+        guard runner.ready, tab.isPython, !preparing else { return }
+        preparing = true
         editor.hideCompletions()
         editor.endEditing()
         // 元のファイルがあるタブだけ保存する(新しいファイルは保存場所が未定)
-        if settings.saveOnRun && tab.fileId != nil && tab.isDirty {
-            Task { await save(tab.key, automatic: true) }
+        Task {
+            defer { preparing = false }
+            if settings.saveOnRun && tab.fileId != nil && tab.isDirty {
+                await save(tab.key, automatic: true)
+            }
+            project = nil
+            var problem: String?
+            if let fileId = index(tab.key).flatMap({ tabs[$0].fileId }) {
+                do {
+                    project = try files.project(for: fileId)
+                } catch {
+                    problem = error.localizedDescription
+                }
+            }
+            runner.onFiles = { [weak self] changes in self?.writeBack(changes) }
+            runner.run(tab.text, project: project?.message)
+            if let problem { runner.note("作業フォルダーを使えません: " + problem) }
         }
-        runner.run(tab.text)
     }
 }
 

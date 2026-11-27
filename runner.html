@@ -13,7 +13,21 @@ body { display: flex; justify-content: center; align-items: center; }
 <canvas id="canvas" tabindex="0" width="400" height="300"></canvas>
 
 <script type="text/plain" id="runner">
-import ast, asyncio, inspect, os, time, traceback
+import ast, asyncio, inspect, os, sys, time, traceback, types
+
+def enter_project(folder):
+    # プログラムがあるフォルダーを「今いる場所」にする
+    os.chdir(folder)
+    sys.path.insert(0, folder)
+
+def leave_project(folder):
+    os.chdir("/home/pyodide")
+    if folder in sys.path:
+        sys.path.remove(folder)
+    # 次の実行で、書きかえた自作モジュールを読み直せるようにする
+    for name, module in list(sys.modules.items()):
+        if (getattr(module, "__file__", None) or "").startswith("/project/"):
+            del sys.modules[name]
 
 os.environ["SDL_EMSCRIPTEN_KEYBOARD_ELEMENT"] = "#canvas"
 _stop = False
@@ -110,8 +124,9 @@ def _prepare(source):
     ast.fix_missing_locations(tree)
     return compile(tree, "main.py", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
-async def run_user(source):
+async def run_user(source, filename="main.py", has_folder=False):
     global _stop, _next
+    module = previous = None
     _stop = False
     _next = 0.0
     try:
@@ -120,7 +135,12 @@ async def run_user(source):
             _install(pygame)
         except ImportError:
             pass
-        env = {"__name__": "__main__", "__frame": __frame}
+        # pickleが自分で作ったクラスを見つけられるように、本物の __main__ として実行する
+        module = types.ModuleType("__main__")
+        env = module.__dict__
+        env.update(__frame=__frame, __file__=os.path.abspath(filename))
+        previous = sys.modules.get("__main__")
+        sys.modules["__main__"] = module
         result = eval(_prepare(source), env)
         if inspect.isawaitable(result):
             await result
@@ -129,9 +149,16 @@ async def run_user(source):
         print("--- 停止しました ---")
     except SystemExit:
         print("--- 終了しました ---")
+    except FileNotFoundError:
+        print(traceback.format_exc())
+        if not has_folder:
+            print("ヒント: ほかのファイルを使うときは、上の「作業フォルダ」ボタンで、"
+                  "このプログラムが入っているフォルダーを選んでください。")
     except BaseException:
         print(traceback.format_exc())
     finally:
+        if previous is not None:
+            sys.modules["__main__"] = previous
         try:
             import pygame
             pygame.quit()
@@ -255,20 +282,91 @@ async function start() {
     py.runPython($("runner").textContent);
     const runUser = py.globals.get("run_user");
     const stopUser = py.globals.get("stop_user");
+    const enterProject = py.globals.get("enter_project");
+    const leaveProject = py.globals.get("leave_project");
+
+    // ---- 作業フォルダー(実行部分の中に、写しを作る) ----
+    const ROOT = "/project";
+    const toBytes = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
+    const toText = bytes => {
+      let s = "";
+      for (let i = 0; i < bytes.length; i += 32768) s += String.fromCharCode(...bytes.subarray(i, i + 32768));
+      return btoa(s);
+    };
+    const same = (a, b) => !!a && a.length === b.length && a.every((v, i) => v === b[i]);
+    let known = new Map();   // iPad側と同じ内容になっているファイル
+
+    function remove(path) {
+      if (!py.FS.analyzePath(path).exists) return;
+      if (py.FS.isDir(py.FS.stat(path).mode)) {
+        for (const n of py.FS.readdir(path)) if (n !== "." && n !== "..") remove(path + "/" + n);
+        py.FS.rmdir(path);
+      } else py.FS.unlink(path);
+    }
+    function load(project) {
+      remove(ROOT);
+      known = new Map();
+      py.FS.mkdirTree(ROOT);
+      for (const dir of project.dirs) py.FS.mkdirTree(ROOT + "/" + dir);
+      for (const [path, data] of project.files) {
+        const full = ROOT + "/" + path, bytes = toBytes(data);
+        py.FS.mkdirTree(full.slice(0, full.lastIndexOf("/")));
+        py.FS.writeFile(full, bytes);
+        known.set(path, { bytes, stamp: stamp(full) });
+      }
+    }
+    function stamp(full) {
+      const s = py.FS.stat(full);
+      return s.size + ":" + s.mtime.getTime();
+    }
+    // プログラムが作った・書きかえたファイルを、アプリ側へ送る
+    function sync(force) {
+      const changed = [];
+      const walk = dir => {
+        for (const n of py.FS.readdir(dir)) {
+          if (n === "." || n === ".." || n === "__pycache__") continue;
+          const full = dir + "/" + n, mode = py.FS.lstat(full).mode;
+          if (py.FS.isDir(mode)) walk(full);
+          else if (py.FS.isFile(mode)) {
+            const path = full.slice(ROOT.length + 1), now = stamp(full), old = known.get(path);
+            if (!force && old && old.stamp === now) continue;
+            const bytes = py.FS.readFile(full);
+            if (!old || !same(old.bytes, bytes)) changed.push([path, toText(bytes)]);
+            known.set(path, { bytes, stamp: now });
+          }
+        }
+      };
+      walk(ROOT);
+      if (changed.length) send("files", JSON.stringify(changed));
+    }
     // 入力補完は、実行するコードとは別の場所に読み込む
     const space = py.globals.get("dict")();
     py.runPython($("completer").textContent, { globals: space });
     const complete = space.get("complete");
     window.completeCode = (source, base, prefix) => complete(source, base, prefix);
     window.stopCode = () => stopUser();
-    window.runCode = async source => {
+    window.runCode = async (source, project) => {
       $("canvas").focus();
+      let folder = "", timer = 0;
       try {
+        if (project) {
+          load(project);
+          const slash = project.script.lastIndexOf("/");
+          folder = slash < 0 ? ROOT : ROOT + "/" + project.script.slice(0, slash);
+          py.FS.mkdirTree(folder);
+          enterProject(folder);
+          timer = setInterval(() => { try { sync(false); } catch (e) { log(String(e)); } }, 2000);
+        }
         await py.loadPackagesFromImports(source, { messageCallback: () => {} }).catch(() => {});
-        await runUser(source);
+        await runUser(source, project ? project.script.split("/").pop() : "main.py", !!project);
       } catch (e) {
         log(String(e));
       } finally {
+        clearInterval(timer);
+        if (folder) {
+          try { sync(true); } catch (e) { log(String(e)); }
+          leaveProject(folder);
+        }
         flush();
         full = false;
         fitCanvas();

@@ -1,6 +1,23 @@
 import UIKit
 import UniformTypeIdentifiers
 
+// 実行するときに渡す、作業フォルダーの中身
+struct Project {
+    let root: URL
+    let script: String          // フォルダーから見た、プログラムの場所
+    var originals: [String: Data]
+    let folders: [String]
+
+    var message: [String: Any] {
+        ["script": script, "dirs": folders,
+         "files": originals.map { [$0.key, $0.value.base64EncodedString()] }]
+    }
+}
+
+struct ProjectError: LocalizedError {
+    let errorDescription: String?
+}
+
 struct OpenedFile {
     let id: String
     let name: String
@@ -55,6 +72,136 @@ final class FileStore: NSObject, UIDocumentPickerDelegate {
             try replace(url, with: text)
             return true
         }
+    }
+
+    // MARK: 作業フォルダー
+
+    // 選んだフォルダーを覚える。キャンセルしたときは nil
+    func chooseFolder() async throws -> String? {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        guard let url = await pick(picker).first else { return nil }
+        let data = try withAccess(url) { try url.bookmarkData() }
+        var all = folderBookmarks
+        all[url.resolvingSymlinksInPath().path] = data
+        folderBookmarks = all
+        return url.lastPathComponent
+    }
+
+    private var folderBookmarks: [String: Data] {
+        get { UserDefaults.standard.dictionary(forKey: "folders") as? [String: Data] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "folders") }
+    }
+
+    private func parts(_ url: URL) -> [String] {
+        url.resolvingSymlinksInPath().pathComponents
+    }
+
+    // ファイルが入っている作業フォルダーを探して、中身を読む。なければ nil
+    func project(for fileId: String) throws -> Project? {
+        let file = try find(fileId)
+        let fileParts = withAccess(file) { parts(file) }
+        var best: (url: URL, count: Int)?
+        for data in folderBookmarks.values {
+            var stale = false
+            guard let root = try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &stale) else { continue }
+            let rootParts = withAccess(root) { parts(root) }
+            if fileParts.count > rootParts.count && Array(fileParts.prefix(rootParts.count)) == rootParts
+                && rootParts.count > (best?.count ?? 0) {
+                best = (root, rootParts.count)
+            }
+        }
+        guard let found = best else { return nil }
+        let script = fileParts.dropFirst(found.count).joined(separator: "/")
+        return try withAccess(found.url) { try scan(found.url, script: script) }
+    }
+
+    private func scan(_ root: URL, script: String) throws -> Project {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]
+        guard let items = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys,
+                                                         options: [.skipsHiddenFiles]) else {
+            throw ProjectError(errorDescription: "作業フォルダーを読めませんでした。")
+        }
+        let tooBig = ProjectError(errorDescription: "作業フォルダーが大きすぎます(500個・合計30MBまで)。必要なファイルだけを入れたフォルダーを選んでください。")
+        let rootCount = parts(root).count
+        var files: [String: Data] = [:]
+        var folders: [String] = []
+        var total = 0
+        var count = 0
+        for case let item as URL in items {
+            if item.lastPathComponent == "__pycache__" {
+                items.skipDescendants()
+                continue
+            }
+            count += 1
+            if count > 500 { throw tooBig }
+            let info = try item.resourceValues(forKeys: Set(keys))
+            let path = parts(item).dropFirst(rootCount).joined(separator: "/")
+            if info.isDirectory == true {
+                folders.append(path)
+            } else if info.isRegularFile == true {
+                total += info.fileSize ?? 0
+                if total > 30_000_000 { throw tooBig }
+                files[path] = try readData(item)
+            }
+        }
+        return Project(root: root, script: script, originals: files, folders: folders)
+    }
+
+    // プログラムが作った・書きかえたファイルを、iPadのフォルダーに書く
+    // 戻り値は、画面に出すお知らせ
+    func writeBack(_ changes: [[String]], to project: inout Project) -> [String] {
+        var notes: [String] = []
+        withAccess(project.root) {
+            for change in changes where change.count == 2 {
+                let path = change[0]
+                let names = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+                // フォルダーの外には書かない
+                if names.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) { continue }
+                guard let data = Data(base64Encoded: change[1]) else { continue }
+                let target = names.reduce(project.root) { $0.appendingPathComponent($1) }
+                do {
+                    let real = parts(target.deletingLastPathComponent())
+                    let rootParts = parts(project.root)
+                    if Array(real.prefix(rootParts.count)) != rootParts { continue }
+                    if FileManager.default.fileExists(atPath: target.path) {
+                        // 実行中にほかの場所で変わったファイルは、上書きしない
+                        let now = try readData(target)
+                        if now != project.originals[path] && now != data {
+                            notes.append("「\(path)」はほかの場所で変わっていたので、上書きしませんでした。")
+                            continue
+                        }
+                    } else {
+                        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
+                                                                withIntermediateDirectories: true)
+                    }
+                    try writeData(data, to: target)
+                    project.originals[path] = data
+                } catch {
+                    notes.append("「\(path)」を保存できませんでした: \(error.localizedDescription)")
+                }
+            }
+        }
+        return notes
+    }
+
+    private func readData(_ url: URL) throws -> Data {
+        var coordinationError: NSError?
+        var result: Result<Data, Error> = .failure(CocoaError(.fileReadUnknown))
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { target in
+            result = Result { try Data(contentsOf: target) }
+        }
+        if let coordinationError { throw coordinationError }
+        return try result.get()
+    }
+
+    private func writeData(_ data: Data, to url: URL) throws {
+        var coordinationError: NSError?
+        var result: Result<Void, Error> = .failure(CocoaError(.fileWriteUnknown))
+        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { target in
+            result = Result { try data.write(to: target) }
+        }
+        if let coordinationError { throw coordinationError }
+        try result.get()
     }
 
     func forget(_ id: String) {

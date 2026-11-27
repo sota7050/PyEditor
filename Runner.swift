@@ -51,14 +51,25 @@ final class Runner: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDele
                 "aw": Double(appSize.width), "ah": Double(appSize.height)])
     }
 
-    func run(_ source: String) {
+    // プログラムがファイルを変えたときに呼ぶ
+    var onFiles: (([[String]]) -> Void)?
+
+    func note(_ text: String) {
+        output = String((output + text + "\n").suffix(20000))
+        showPanel = true
+    }
+
+    func run(_ source: String, project: [String: Any]? = nil) {
         output = ""
         showPanel = true
         running = true
         sendLayout()
         webView.becomeFirstResponder()
         // 終わるのを待たずに始める(終わると "done" が届く)
-        script("window.runCode(source); return null;", ["source": source])
+        var folder: Any = NSNull()
+        if let project { folder = project }
+        script("window.runCode(source, project); return null;",
+               ["source": source, "project": folder])
     }
 
     func stop() {
@@ -99,6 +110,10 @@ final class Runner: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDele
         case "screen":
             showPanel = true
             fullScreen = value == "full"
+        case "files":
+            if let list = try? JSONDecoder().decode([[String]].self, from: Data(value.utf8)) {
+                onFiles?(list)
+            }
         case "done":
             running = false
             fullScreen = false
