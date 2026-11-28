@@ -120,7 +120,7 @@ struct ContentView: View {
                 Text(statusText).font(.caption2)
                     .foregroundColor(model.settings.color("comment"))
             }
-            .padding(.horizontal, 230)
+            .padding(.horizontal, 272)
 
             HStack(spacing: 2) {
                 icon("doc.badge.plus", "新規") { model.newFile() }
@@ -128,6 +128,8 @@ struct ContentView: View {
                 icon("folder", "開く") { model.openFiles() }
                     .keyboardShortcut("o", modifiers: .command)
                 icon("folder.badge.gearshape", "作業フォルダ") { model.chooseFolder() }
+                icon("magnifyingglass", "検索と置換") { model.editor.openFind() }
+                    .keyboardShortcut("f", modifiers: .command)
                 icon("square.and.arrow.down", "保存") { model.saveCurrent() }
                     .keyboardShortcut("s", modifiers: .command)
                 icon("square.and.arrow.up", "別名で保存") { model.saveCurrent(asNew: true) }

@@ -14,6 +14,13 @@ final class EditorBridge: ObservableObject {
     @Published var completions: [Completion] = []
     @Published var selected = 0
     @Published var caret = CGRect.zero
+    // 検索と置換
+    @Published var findVisible = false
+    @Published var query = ""
+    @Published var replacement = ""
+    @Published var matchCase = false
+    @Published var findStatus = ""
+    @Published var findFocus = 0     // 増やすと、検索の欄にカーソルを移す
     var wordLength = 0
     var request = 0
     weak var coordinator: CodeEditor.Coordinator?
@@ -25,6 +32,20 @@ final class EditorBridge: ObservableObject {
 
     func accept(_ i: Int) { coordinator?.accept(i) }
 
+    func openFind() {
+        hideCompletions()
+        // 文字を選んでいたら、それを検索する言葉にする
+        if let word = coordinator?.selectedWord() { query = word }
+        findVisible = true
+        findFocus += 1
+        DispatchQueue.main.async { [weak self] in self?.coordinator?.search() }
+    }
+
+    func closeFind() {
+        findVisible = false
+        coordinator?.endFind()
+    }
+
     func endEditing() { coordinator?.textView?.resignFirstResponder() }
 }
 
@@ -32,17 +53,107 @@ struct EditorArea: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                CodeEditor(model: model,
-                           tabKey: model.activeKey,
-                           version: model.textVersion,
-                           settings: model.settings,
-                           isPython: model.current.isPython)
-                CompletionList(bridge: model.editor, settings: model.settings, area: proxy.size)
+        VStack(spacing: 0) {
+            FindBar(bridge: model.editor, settings: model.settings)
+            GeometryReader { proxy in
+                ZStack(alignment: .topLeading) {
+                    CodeEditor(model: model,
+                               tabKey: model.activeKey,
+                               version: model.textVersion,
+                               settings: model.settings,
+                               isPython: model.current.isPython)
+                    CompletionList(bridge: model.editor, settings: model.settings, area: proxy.size)
+                }
             }
+            .clipped()
         }
-        .clipped()
+    }
+}
+
+struct FindBar: View {
+    @ObservedObject var bridge: EditorBridge
+    let settings: AppSettings
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        if bridge.findVisible {
+            VStack(spacing: 6) {
+                findRow
+                replaceRow
+            }
+            .padding(8)
+            .background(settings.color("fg").opacity(0.08))
+            .onAppear { focus() }
+            .onChange(of: bridge.findFocus) { _ in focus() }
+            .onChange(of: bridge.query) { _ in search() }
+            .onChange(of: bridge.matchCase) { _ in search() }
+        }
+    }
+
+    // 画面に出てから、カーソルを移す
+    private func focus() {
+        DispatchQueue.main.async { focused = true }
+    }
+
+    private func search() {
+        DispatchQueue.main.async { bridge.coordinator?.search() }
+    }
+
+    private var findRow: some View {
+        HStack(spacing: 4) {
+            field("検索", text: $bridge.query)
+                .focused($focused)
+                .submitLabel(.search)
+                .onSubmit {
+                    bridge.coordinator?.step(1)
+                    focus()
+                }
+            Text(bridge.findStatus)
+                .font(.caption)
+                .foregroundColor(settings.color("comment"))
+                .frame(minWidth: 44)
+            Button { bridge.matchCase.toggle() } label: {
+                Text("Aa")
+                    .frame(width: 34, height: 34)
+                    .background(bridge.matchCase ? settings.color("func").opacity(0.3) : Color.clear)
+                    .cornerRadius(6)
+            }
+            .accessibilityLabel("大文字と小文字を区別する")
+            small("chevron.up", "前を検索") { bridge.coordinator?.step(-1) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+            small("chevron.down", "次を検索") { bridge.coordinator?.step(1) }
+                .keyboardShortcut("g", modifiers: .command)
+            small("xmark", "検索を閉じる") { bridge.closeFind() }
+                .keyboardShortcut(.cancelAction)
+        }
+    }
+
+    private var replaceRow: some View {
+        HStack(spacing: 8) {
+            field("置換後の文字", text: $bridge.replacement)
+            Button("置換") { bridge.coordinator?.replaceOne() }
+            Button("すべて置換") { bridge.coordinator?.replaceAll() }
+        }
+        .font(.subheadline)
+    }
+
+    private func field(_ title: String, text: Binding<String>) -> some View {
+        TextField(title, text: text)
+            .font(.system(size: 15, design: .monospaced))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .padding(.horizontal, 8)
+            .frame(height: 34)
+            .background(settings.color("bg"))
+            .cornerRadius(6)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(settings.color("fg").opacity(0.25)))
+    }
+
+    private func small(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).frame(width: 34, height: 34)
+        }
+        .accessibilityLabel(label)
     }
 }
 
@@ -312,6 +423,8 @@ struct CodeEditor: UIViewRepresentable {
         private var typed = false
         private var shownAt = 0         // 候補を出したときのカーソルの位置
         private var positions: [String: (NSRange, CGPoint)] = [:]
+        private var matches: [NSRange] = []
+        private var matchIndex = 0
 
         init(model: AppModel) {
             self.model = model
@@ -358,6 +471,7 @@ struct CodeEditor: UIViewRepresentable {
                 view.selectedRange = NSRange(location: location, length: 0)
                 view.setContentOffset(saved?.1 ?? .zero, animated: false)
             }
+            findMatches(view, from: view.selectedRange.location)
             restyleText(view)
             applying = false
             view.setNeedsLayout()
@@ -367,6 +481,14 @@ struct CodeEditor: UIViewRepresentable {
         private func restyleText(_ view: CodeTextView) {
             let selection = view.selectedRange
             Syntax.highlight(view.textStorage, settings: settings, font: font, python: isPython)
+            // 見つかった場所に色を付ける(今の場所は濃くする)
+            let length = view.textStorage.length
+            for (i, range) in matches.enumerated() where NSMaxRange(range) <= length {
+                let alpha: CGFloat = i == matchIndex ? 0.55 : 0.2
+                view.textStorage.addAttribute(.backgroundColor,
+                                              value: settings.uiColor("number").withAlphaComponent(alpha),
+                                              range: range)
+            }
             view.typingAttributes = [.font: font, .foregroundColor: settings.uiColor("fg")]
             view.selectedRange = selection
             view.gutter.setNeedsDisplay()
@@ -391,7 +513,10 @@ struct CodeEditor: UIViewRepresentable {
 
         private func changed(_ view: CodeTextView) {
             // 日本語の変換中は、色を変えない
-            if view.markedTextRange == nil { restyleText(view) }
+            if view.markedTextRange == nil {
+                findMatches(view, from: view.selectedRange.location)
+                restyleText(view)
+            }
             model.edited(key, view.text)
             view.setNeedsLayout()
         }
@@ -418,6 +543,123 @@ struct CodeEditor: UIViewRepresentable {
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             typed = false
             bridge.hideCompletions()
+        }
+
+        // MARK: 検索と置換
+
+        // 曲がった引用符は、まっすぐなものにして検索する
+        private func normalized(_ text: String) -> String {
+            text.replacingOccurrences(of: "\u{2018}", with: "'")
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .replacingOccurrences(of: "\u{201C}", with: "\"")
+                .replacingOccurrences(of: "\u{201D}", with: "\"")
+        }
+
+        private func findMatches(_ view: CodeTextView, from position: Int) {
+            matches = []
+            matchIndex = 0
+            let word = normalized(bridge.query)
+            if bridge.findVisible && !word.isEmpty {
+                let text = view.textStorage.string as NSString
+                let options: NSString.CompareOptions = bridge.matchCase ? [.literal] : [.caseInsensitive]
+                var start = 0
+                while start < text.length && matches.count < 5000 {
+                    let found = text.range(of: word, options: options,
+                                           range: NSRange(location: start, length: text.length - start))
+                    if found.location == NSNotFound || found.length == 0 { break }
+                    matches.append(found)
+                    start = NSMaxRange(found)
+                }
+                matchIndex = matches.firstIndex { $0.location >= position } ?? 0
+            }
+            showStatus()
+        }
+
+        private func showStatus() {
+            let status: String
+            if bridge.query.isEmpty { status = "" }
+            else if matches.isEmpty { status = "なし" }
+            else { status = "\(matchIndex + 1)/\(matches.count)" }
+            DispatchQueue.main.async { [weak self] in
+                if self?.bridge.findStatus != status { self?.bridge.findStatus = status }
+            }
+        }
+
+        private func showMatch(_ view: CodeTextView) {
+            guard matches.indices.contains(matchIndex) else { return }
+            applying = true
+            view.selectedRange = matches[matchIndex]
+            restyleText(view)
+            applying = false
+            view.scrollRangeToVisible(matches[matchIndex])
+            showStatus()
+        }
+
+        func selectedWord() -> String? {
+            guard let view = textView, view.selectedRange.length > 0 else { return nil }
+            let word = (view.textStorage.string as NSString).substring(with: view.selectedRange)
+            return word.contains("\n") || word.count > 200 ? nil : word
+        }
+
+        func search() {
+            guard let view = textView, view.markedTextRange == nil else { return }
+            bridge.hideCompletions()
+            findMatches(view, from: view.selectedRange.location)
+            if matches.isEmpty {
+                applying = true
+                restyleText(view)
+                applying = false
+            } else {
+                showMatch(view)
+            }
+        }
+
+        func step(_ direction: Int) {
+            guard let view = textView else { return }
+            if matches.isEmpty {
+                search()
+                return
+            }
+            matchIndex = (matchIndex + direction + matches.count) % matches.count
+            showMatch(view)
+        }
+
+        func replaceOne() {
+            guard let view = textView, view.markedTextRange == nil,
+                  matches.indices.contains(matchIndex) else { return }
+            let range = matches[matchIndex]
+            let value = bridge.replacement
+            replace(range, with: value, cursor: range.location + (value as NSString).length,
+                    suggestAfter: false)
+            typed = false
+            showMatch(view)
+        }
+
+        // まとめて1回で書きかえるので、「元に戻す」も1回で戻る
+        func replaceAll() {
+            guard let view = textView, view.markedTextRange == nil,
+                  let first = matches.first, let last = matches.last else { return }
+            let whole = NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+            let result = NSMutableString(string: (view.textStorage.string as NSString).substring(with: whole))
+            for range in matches.reversed() {
+                let local = NSRange(location: range.location - whole.location, length: range.length)
+                result.replaceCharacters(in: local, with: bridge.replacement)
+            }
+            let count = matches.count
+            let value = result as String
+            replace(whole, with: value, cursor: whole.location, suggestAfter: false)
+            typed = false
+            DispatchQueue.main.async { [weak self] in self?.bridge.findStatus = "\(count)件置換" }
+        }
+
+        func endFind() {
+            matches = []
+            matchIndex = 0
+            guard let view = textView else { return }
+            applying = true
+            restyleText(view)
+            applying = false
+            view.becomeFirstResponder()
         }
 
         // MARK: かっこ・引用符・字下げ

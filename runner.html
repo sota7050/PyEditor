@@ -66,6 +66,148 @@ class _Clock:
         total = sum(self._times)
         return 1000 * len(self._times) / total if total else 0.0
 
+def _make_freetype(pygame):
+    # この版のpygame.freetypeは内部が壊れているので、
+    # 正しく動くpygame.fontを使って、同じ書き方ができる代わりを作る
+    import tempfile
+    import pygame.font
+
+    ft = types.ModuleType("pygame.freetype")
+    ft.STYLE_NORMAL, ft.STYLE_STRONG, ft.STYLE_OBLIQUE = 0, 1, 2
+    ft.STYLE_UNDERLINE, ft.STYLE_WIDE, ft.STYLE_DEFAULT = 4, 8, 255
+    default_font = os.path.join(os.path.dirname(pygame.__file__), "freesansbold.ttf")
+    state = {"resolution": 72}
+
+    def init(cache_size=64, resolution=72):
+        state["resolution"] = resolution or 72
+        pygame.font.init()
+
+    def style_flag(bit):
+        def get(self):
+            return bool(self.style & bit)
+        def put(self, on):
+            self.style = self.style | bit if on else self.style & ~bit
+        return property(get, put)
+
+    class Font:
+        strong = style_flag(1)
+        oblique = style_flag(2)
+        underline = style_flag(4)
+        wide = style_flag(8)
+
+        def __init__(self, file=None, size=0, font_index=0, resolution=0, ucs4=False):
+            pygame.font.init()
+            if file is None:
+                self.path = default_font
+            elif hasattr(file, "read"):
+                self.path = "<file>"
+            else:
+                self.path = os.fspath(file)
+            # このアプリでは、フォントは「ファイルの場所」から読む必要がある
+            if hasattr(file, "read"):
+                with tempfile.NamedTemporaryFile(suffix=".ttf", delete=False) as copy:
+                    copy.write(file.read())
+                self._source = copy.name
+            else:
+                self._source = os.path.abspath(self.path)
+                if not os.path.isfile(self._source):
+                    raise FileNotFoundError(2, "フォントのファイルがありません", self.path)
+            self.name = os.path.splitext(os.path.basename(self.path))[0]
+            self.size = size
+            self.resolution = resolution or state["resolution"]
+            self.style = 0
+            self.antialiased = True
+            self.origin = False
+            self.pad = False
+            self.kerning = False
+            self.fgcolor = pygame.Color(0, 0, 0)
+            self.bgcolor = pygame.Color(0, 0, 0, 0)
+            self.rotation = 0
+            self._cache = {}
+
+        def _font(self, size=0, style=255):
+            size = size or self.size
+            if isinstance(size, (tuple, list)):
+                size = size[1] or size[0]
+            if size <= 0:
+                raise ValueError("文字の大きさ(size)を指定してください")
+            style = self.style if style == 255 else style
+            pixels = max(1, round(size * self.resolution / 72))
+            key = (pixels, style)
+            if key not in self._cache:
+                font = pygame.font.Font(self._source, pixels)
+                font.bold = bool(style & (1 | 8))
+                font.italic = bool(style & 2)
+                font.underline = bool(style & 4)
+                self._cache[key] = font
+            return self._cache[key]
+
+        def _draw(self, text, fgcolor, style, rotation, size):
+            font = self._font(size, style)
+            color = pygame.Color(self.fgcolor if fgcolor is None else fgcolor)
+            full = font.render(text, self.antialiased, (color.r, color.g, color.b))
+            ascent = font.get_ascent()
+            box = full.get_bounding_rect()
+            if self.pad:
+                box = full.get_rect()
+            elif box.width == 0:  # 空白だけのとき
+                box = pygame.Rect(0, ascent, full.get_width(), 0)
+            image = pygame.Surface(box.size, pygame.SRCALPHA)
+            image.blit(full, (0, 0), box)
+            if color.a < 255:
+                image.fill((255, 255, 255, color.a), special_flags=pygame.BLEND_RGBA_MULT)
+            rect = pygame.Rect(box.x, ascent - box.y, box.width, box.height)
+            angle = self.rotation if rotation == 0 else rotation
+            if angle:
+                image = pygame.transform.rotate(image, angle)
+                rect.size = image.get_size()
+            return image, rect
+
+        def get_rect(self, text, style=255, rotation=0, size=0):
+            return self._draw(text, None, style, rotation, size)[1]
+
+        def render(self, text, fgcolor=None, bgcolor=None, style=255, rotation=0, size=0):
+            image, rect = self._draw(text, fgcolor, style, rotation, size)
+            if bgcolor is not None:
+                back = pygame.Surface(image.get_size(), pygame.SRCALPHA)
+                back.fill(bgcolor)
+                back.blit(image, (0, 0))
+                image = back
+            return image, rect
+
+        def render_to(self, surf, dest, text, fgcolor=None, bgcolor=None,
+                      style=255, rotation=0, size=0):
+            image, rect = self.render(text, fgcolor, bgcolor, style, rotation, size)
+            x, y = dest[0], dest[1]
+            if self.origin:  # destを文字の下の線(ベースライン)の位置として扱う
+                x, y = x + rect.x, y - rect.y
+            surf.blit(image, (x, y))
+            return pygame.Rect(x, y, image.get_width(), image.get_height())
+
+        def get_sized_height(self, size=0):
+            return self._font(size).get_linesize()
+
+        def get_sized_ascender(self, size=0):
+            return self._font(size).get_ascent()
+
+        def get_sized_descender(self, size=0):
+            return self._font(size).get_descent()
+
+    def SysFont(name, size, bold=False, italic=False):
+        # iPadの中のフォントは使えないので、最初から入っているフォントを使う
+        font = Font(None, size)
+        font.strong, font.oblique = bold, italic
+        return font
+
+    ft.Font, ft.SysFont, ft.init = Font, SysFont, init
+    ft.quit = lambda: None
+    ft.get_init = ft.was_init = pygame.font.get_init
+    ft.get_default_font = lambda: "freesansbold.ttf"
+    ft.get_default_resolution = lambda: state["resolution"]
+    ft.set_default_resolution = lambda r=72: state.update(resolution=r or 72)
+    sys.modules["pygame.freetype"] = ft
+    pygame.freetype = ft
+
 def _install(pygame):
     if getattr(pygame, "_editor_ready", False):
         return
@@ -84,6 +226,7 @@ def _install(pygame):
         flags &= ~(pygame.FULLSCREEN | pygame.SCALED)
         return original((w, h), flags, *args, **kwargs)
 
+    _make_freetype(pygame)
     pygame.display.set_mode = set_mode
     pygame.time.Clock = _Clock
     pygame._editor_ready = True
