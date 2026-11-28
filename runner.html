@@ -37,6 +37,8 @@ class _Stop(BaseException):
     pass
 
 _next = 0.0  # 次のコマを始めてよい時刻
+_ticked = False  # clock.tick が呼ばれたか
+_last = 0.0  # 最後にブラウザへ時間を渡した時刻
 
 class _Clock:
     # もとのClockは待つ間に画面を止めることがあるので、置きかえる
@@ -46,7 +48,8 @@ class _Clock:
         self._ms = 0
 
     def tick(self, framerate=0):
-        global _next
+        global _next, _ticked
+        _ticked = True
         now = time.perf_counter()
         self._ms = int((now - self._last) * 1000)
         self._last = now
@@ -231,47 +234,205 @@ def _install(pygame):
     pygame.time.Clock = _Clock
     pygame._editor_ready = True
 
-async def __frame():
+async def __frame(shown=False):
     # 画面の更新とタッチの処理をする時間をブラウザに渡す
-    await asyncio.sleep(max(_next - time.perf_counter(), 0.004))
+    # 計算だけのくり返しが遅くならないように、必要なときだけ渡す
+    global _ticked, _last
+    if shown or _ticked or time.perf_counter() - _last >= 0.03:
+        await asyncio.sleep(max(_next - time.perf_counter(), 0.004))
+        _ticked = False
+        _last = time.perf_counter()
     if _stop:
         raise _Stop
 
+_FUNCTION = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_COMPREHENSION = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+def _dotted(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return _dotted(node.value) + "." + node.attr
+    return ""
+
+def _is_show(call):
+    name = _dotted(call.func)
+    return name.endswith(("display.flip", "display.update"))
+
+def _is_frame_call(call):
+    f = call.func
+    if isinstance(f, ast.Attribute) and f.attr in ("tick", "tick_busy_loop"):
+        return True
+    return _is_show(call) or _dotted(f).endswith(("event.get", "event.poll"))
+
+def _own_nodes(function):
+    # 関数の中身を調べる(中に作った別の関数やクラスは除く)
+    todo = list(function.body)
+    while todo:
+        node = todo.pop()
+        yield node
+        if not isinstance(node, _FUNCTION):
+            todo.extend(ast.iter_child_nodes(node))
+
+def _choose_functions(tree):
+    # def で作った関数のうち、画面を更新するものは、
+    # 途中でブラウザに時間を渡せる形(async def)に自動で変える
+    functions, other_names = {}, set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            if node.name in functions:
+                other_names.add(node.name)
+            functions[node.name] = node
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and functions.get(node.name) is not node:
+            other_names.add(node.name)
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            other_names.add(node.id)
+        elif isinstance(node, ast.arg):
+            other_names.add(node.arg)
+        elif isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef)):
+            other_names.add(node.name)
+        elif isinstance(node, ast.alias):
+            other_names.add(node.asname or node.name)
+
+    allowed = {}
+    for name, function in functions.items():
+        generator = any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in _own_nodes(function))
+        if not (generator or function.decorator_list or name.startswith("__") or name in other_names):
+            allowed[name] = function
+
+    chosen = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, function in allowed.items():
+            if name not in chosen and any(
+                    isinstance(n, ast.Call) and (_is_frame_call(n) or
+                    isinstance(n.func, ast.Name) and n.func.id in chosen)
+                    for n in _own_nodes(function)):
+                chosen.add(name)
+                changed = True
+
+    # 「await」を書けない場所で使われている関数は、変えない
+    while True:
+        good, uses = set(), []
+        def look(node, can_wait):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and can_wait):
+                good.add(id(node.func))
+            if isinstance(node, ast.Name) and node.id in chosen:
+                uses.append(node)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                inside = isinstance(node, ast.AsyncFunctionDef) or (
+                    node.name in chosen and functions.get(node.name) is node)
+                for child in node.body:
+                    look(child, inside)
+                for child in node.decorator_list + [node.args] + ([node.returns] if node.returns else []):
+                    look(child, False)
+                return
+            if isinstance(node, (ast.ClassDef, ast.Lambda) + _COMPREHENSION):
+                can_wait = False
+            for child in ast.iter_child_nodes(node):
+                look(child, can_wait)
+        look(tree, True)
+        bad = {n.id for n in uses if id(n) not in good}
+        if not bad:
+            return chosen
+        chosen -= bad
+
 class _AddFrame(ast.NodeTransformer):
+    def __init__(self, chosen, functions):
+        self.chosen = chosen
+        self.functions = functions
+        self.can_wait = True
+
+    def _inside(self, node, can_wait):
+        before, self.can_wait = self.can_wait, can_wait
+        node.body = self._body(node.body)
+        self.can_wait = before
+        return node
+
+    def _body(self, body):
+        result = []
+        for child in body:
+            new = self.visit(child)
+            result.extend(new if isinstance(new, list) else [new])
+        return result
+
     def visit_FunctionDef(self, node):
-        return node  # 普通の関数の中は変えない
+        change = node.name in self.chosen and node in self.functions
+        self._inside(node, change)
+        if not change:
+            return node
+        new = ast.AsyncFunctionDef(**{name: getattr(node, name, None) for name in node._fields})
+        return ast.copy_location(new, node)
+
+    def visit_AsyncFunctionDef(self, node):
+        return self._inside(node, True)
 
     def visit_ClassDef(self, node):
-        return node
+        return self._inside(node, False)
 
     def visit_Lambda(self, node):
         return node
 
+    def _no_wait(self, node):
+        before, self.can_wait = self.can_wait, False
+        self.generic_visit(node)
+        self.can_wait = before
+        return node
+
+    visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _no_wait
+
     def visit_While(self, node):
         self.generic_visit(node)
-        wait = ast.parse("await __frame()").body[0]
-        node.body.insert(0, ast.copy_location(wait, node))
+        if self.can_wait:
+            wait = ast.parse("await __frame()").body[0]
+            for n in ast.walk(wait):
+                ast.copy_location(n, node)
+            node.body.insert(0, wait)
+        return node
+
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        if self.can_wait and isinstance(node.func, ast.Name) and node.func.id in self.chosen:
+            return ast.copy_location(ast.Await(node), node)
         return node
 
     def visit_Expr(self, node):
+        if not self.can_wait:
+            return self.generic_visit(node)
         # asyncio.run(main()) は await main() に置きかえる
         v = node.value
-        if (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
-                and v.func.attr == "run" and isinstance(v.func.value, ast.Name)
-                and v.func.value.id == "asyncio" and len(v.args) == 1):
-            node.value = ast.copy_location(ast.Await(v.args[0]), v)
-        return node
+        if isinstance(v, ast.Call) and _dotted(v.func) == "asyncio.run" and len(v.args) == 1:
+            inner = self.visit(v.args[0])
+            if not isinstance(inner, ast.Await):
+                inner = ast.copy_location(ast.Await(inner), v)
+            node.value = inner
+            return node
+        shown = isinstance(v, ast.Call) and _is_show(v)
+        self.generic_visit(node)
+        if not shown:
+            return node
+        # 画面を更新したら、重い計算の前に、すぐに表示させる
+        wait = ast.parse("await __frame(True)").body[0]
+        for n in ast.walk(wait):
+            ast.copy_location(n, node)
+        return [node, wait]
 
 def _prepare(source):
-    tree = _AddFrame().visit(ast.parse(source, "main.py"))
+    tree = ast.parse(source, "main.py")
+    chosen = _choose_functions(tree)
+    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    tree = _AddFrame(chosen, functions).visit(tree)
     ast.fix_missing_locations(tree)
     return compile(tree, "main.py", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
 async def run_user(source, filename="main.py", has_folder=False):
-    global _stop, _next
+    global _stop, _next, _ticked, _last
     module = previous = None
     _stop = False
-    _next = 0.0
+    _next = _last = 0.0
+    _ticked = False
     try:
         try:
             import pygame

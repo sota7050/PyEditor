@@ -90,7 +90,7 @@ struct ContentView: View {
                 Color.black.opacity(0.6)
             }
 
-            RunnerView(runner: runner)
+            RunnerView(runner: runner, generation: runner.generation)
                 .frame(width: webFrame.width, height: webFrame.height)
                 .position(x: webFrame.midX + hiddenShift, y: webFrame.midY)
 

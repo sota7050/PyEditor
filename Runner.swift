@@ -11,15 +11,27 @@ final class Runner: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDele
     @Published var showPanel = false
     @Published var output = ""
 
-    let webView: WKWebView
+    // 作り直した回数。変わると、画面の部品も入れかわる
+    @Published var generation = 0
+
+    private(set) var webView: WKWebView
+    private var runNumber = 0
     private var panelSize = CGSize(width: 400, height: 400)
     private var appSize = CGSize(width: 1180, height: 776)
 
     override init() {
+        webView = Runner.makeWebView()
+        super.init()
+        setUpWebView()
+    }
+
+    private static func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.setURLSchemeHandler(LocalFiles(), forURLScheme: "app")
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 400), configuration: config)
-        super.init()
+        return WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 400), configuration: config)
+    }
+
+    private func setUpWebView() {
         webView.configuration.userContentController.add(self, name: "runner")
         webView.uiDelegate = self
         webView.navigationDelegate = self
@@ -63,6 +75,7 @@ final class Runner: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDele
         output = ""
         showPanel = true
         running = true
+        runNumber += 1
         sendLayout()
         webView.becomeFirstResponder()
         // 終わるのを待たずに始める(終わると "done" が届く)
@@ -74,6 +87,31 @@ final class Runner: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDele
 
     func stop() {
         script("window.stopCode(); return null;")
+        // 重い計算の途中などで返事がないときは、1.5秒後に強制的に止める
+        let number = runNumber
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, self.running, self.runNumber == number else { return }
+            self.forceStop()
+        }
+    }
+
+    // 実行する部分(Web画面)を捨てて、新しく作り直す
+    private func forceStop() {
+        let old = webView
+        old.configuration.userContentController.removeScriptMessageHandler(forName: "runner")
+        old.uiDelegate = nil
+        old.navigationDelegate = nil
+        old.stopLoading()
+        old.removeFromSuperview()
+        ready = false
+        failed = false
+        running = false
+        fullScreen = false
+        webView = Runner.makeWebView()
+        setUpWebView()
+        generation += 1
+        note("--- 返事がないので、強制的に停止しました。次の実行の準備をしています ---")
     }
 
     func complete(source: String, base: String, prefix: String,
@@ -158,8 +196,26 @@ final class Runner: NSObject, ObservableObject, WKScriptMessageHandler, WKUIDele
 
 struct RunnerView: UIViewRepresentable {
     let runner: Runner
-    func makeUIView(context: Context) -> WKWebView { runner.webView }
-    func updateUIView(_ view: WKWebView, context: Context) {}
+    let generation: Int
+
+    func makeUIView(context: Context) -> UIView {
+        let box = UIView()
+        place(in: box)
+        return box
+    }
+
+    func updateUIView(_ box: UIView, context: Context) {
+        place(in: box)
+    }
+
+    @MainActor private func place(in box: UIView) {
+        let web = runner.webView
+        if web.superview === box { return }
+        box.subviews.forEach { $0.removeFromSuperview() }
+        web.frame = box.bounds
+        web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        box.addSubview(web)
+    }
 }
 
 // アプリ内のファイルを app://local/... としてWeb画面に渡す
